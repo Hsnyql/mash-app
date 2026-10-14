@@ -2532,6 +2532,7 @@ fn windows_runtime_manifest_and_installer_are_configured() {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires locally built Windows CV ZIPs; run explicitly in CV CI"]
 fn locally_built_windows_bundles_install_and_report_ready() {
     let mut manifest = parse_runtime_manifest(RUNTIME_MANIFEST_JSON).unwrap();
     let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sidecar/mash_cv/dist");
@@ -2543,10 +2544,16 @@ fn locally_built_windows_bundles_install_and_report_ready() {
         "mash-cv-code-v{}.zip",
         manifest.mash_cv_code_version
     ));
-    if !runtime.is_file() || !code.is_file() {
-        // CI builds these archives first. Source-only unit tests stay offline.
-        return;
-    }
+    assert!(
+        runtime.is_file(),
+        "missing locally built runtime: {}",
+        runtime.display()
+    );
+    assert!(
+        code.is_file(),
+        "missing locally built code package: {}",
+        code.display()
+    );
     // Native runtime builds embed host-specific paths/timestamps. Validate a
     // fresh local build against its own artifact hashes, as release tooling
     // does, rather than requiring byte identity with the published build.

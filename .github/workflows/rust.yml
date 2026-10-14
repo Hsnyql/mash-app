@@ -1,0 +1,177 @@
+name: Rust tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      build_installer:
+        description: Also build and upload an unsigned Windows installer
+        type: boolean
+        default: false
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || steps.filter.outputs.rust == 'true' || steps.filter.outputs.unknown == 'true' }}
+      scripts: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || steps.filter.outputs.scripts == 'true' || steps.filter.outputs.release_skill == 'true' || steps.filter.outputs.unknown == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'push'
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        id: filter
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        with:
+          # Same-branch pushes compare the event's before/after commits; PRs use the files API.
+          base: ${{ github.event_name == 'push' && github.ref_name || '' }}
+          predicate-quantifier: some-with-excludes
+          filters: |
+            rust:
+              - 'src-tauri/**'
+              - 'src/types/**'
+              - '.github/workflows/rust.yml'
+              - '!**/*.md'
+              - '!**/{LICENSE,NOTICE}{,.*}'
+            scripts:
+              - 'scripts/**'
+              - 'src-tauri/**'
+              - '.codex/skills/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.npmrc'
+              - '.github/workflows/rust.yml'
+              - '!**/*.md'
+              - '!**/{LICENSE,NOTICE}{,.*}'
+            release_skill:
+              - '.codex/skills/mash-release-app/SKILL.md'
+            unknown:
+              - '**'
+              - '!src/**'
+              - '!public/**'
+              - '!src-tauri/**'
+              - '!sidecar/mash_cv/**'
+              - '!scripts/**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!**/{LICENSE,NOTICE}{,.*}'
+              - '!{index.html,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,.npmrc}'
+              - '!{vite,vitest,eslint}.config.*'
+              - '!tsconfig*.json'
+              - '!.codex/skills/**'
+              - '!.github/workflows/{frontend,rust,cv}.yml'
+
+  test:
+    name: Rust (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: native-tests-${{ runner.os }}-${{ runner.arch }}
+      - name: Prepare Windows ADB resources
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/windows/prepare-windows-adb.ps1
+      - name: Backend tests
+        shell: bash
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+  scripts:
+    name: Release scripts (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.scripts == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Release script tests
+        shell: bash
+        run: node --test scripts/__tests__/*.test.mjs
+
+  installer:
+    name: Windows installer (manual)
+    needs: [changes, test, scripts]
+    if: github.event_name == 'workflow_dispatch' && inputs.build_installer
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: native-tests-${{ runner.os }}-${{ runner.arch }}
+      - name: Install frontend dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.32.0 --activate
+          pnpm install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test and build unsigned Windows installer
+        run: ./scripts/windows/build-windows.ps1 -Unsigned
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mash-windows-x64
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+  result:
+    name: Rust result
+    if: always()
+    needs: [changes, test, scripts, installer]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check selected jobs
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          TEST_EXPECTED: ${{ needs.changes.outputs.rust == 'true' && 'success' || 'skipped' }}
+          SCRIPTS_RESULT: ${{ needs.scripts.result }}
+          SCRIPTS_EXPECTED: ${{ needs.changes.outputs.scripts == 'true' && 'success' || 'skipped' }}
+          INSTALLER_RESULT: ${{ needs.installer.result }}
+          INSTALLER_EXPECTED: ${{ github.event_name == 'workflow_dispatch' && inputs.build_installer && 'success' || 'skipped' }}
+        run: |
+          set -x
+          test "$CHANGES_RESULT" = success
+          test "$TEST_RESULT" = "$TEST_EXPECTED"
+          test "$SCRIPTS_RESULT" = "$SCRIPTS_EXPECTED"
+          test "$INSTALLER_RESULT" = "$INSTALLER_EXPECTED"

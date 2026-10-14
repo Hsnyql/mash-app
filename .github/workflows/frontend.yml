@@ -1,0 +1,119 @@
+name: Frontend tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      frontend: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'merge_group' || steps.filter.outputs.frontend == 'true' || steps.filter.outputs.unknown == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'push'
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        id: filter
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        with:
+          # Same-branch pushes compare the event's before/after commits; PRs use the files API.
+          base: ${{ github.event_name == 'push' && github.ref_name || '' }}
+          predicate-quantifier: some-with-excludes
+          filters: |
+            frontend:
+              - 'src/**'
+              - 'public/**'
+              - 'index.html'
+              - '{vite,vitest,eslint}.config.*'
+              - 'tsconfig*.json'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.npmrc'
+              - 'src-tauri/src/commands/**'
+              - 'src-tauri/src/lib.rs'
+              - 'src/types/**'
+              - 'src-tauri/src/screen.rs'
+              - 'src-tauri/src/screen/**'
+              - '.github/workflows/frontend.yml'
+              - '!**/*.md'
+              - '!**/{LICENSE,NOTICE}{,.*}'
+            unknown:
+              - '**'
+              - '!src/**'
+              - '!public/**'
+              - '!src-tauri/**'
+              - '!sidecar/mash_cv/**'
+              - '!scripts/**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!**/{LICENSE,NOTICE}{,.*}'
+              - '!{index.html,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,.npmrc}'
+              - '!{vite,vitest,eslint}.config.*'
+              - '!tsconfig*.json'
+              - '!.codex/skills/**'
+              - '!.github/workflows/{frontend,rust,cv}.yml'
+
+  test:
+    name: Frontend checks
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.32.0 --activate
+      - id: store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.store.outputs.path }}
+          key: pnpm-${{ runner.os }}-node22-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-node22-
+      - run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Type check
+        run: pnpm exec tsc
+      - name: Component tests
+        run: pnpm test
+      - name: Build frontend
+        run: pnpm exec vite build
+
+  result:
+    name: Frontend result
+    if: always()
+    needs: [changes, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check selected jobs
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          TEST_EXPECTED: ${{ needs.changes.outputs.frontend == 'true' && 'success' || 'skipped' }}
+        run: |
+          set -x
+          test "$CHANGES_RESULT" = success
+          test "$TEST_RESULT" = "$TEST_EXPECTED"

@@ -23,19 +23,19 @@ Windows CI 及 `pnpm test:scripts` 的 Windows 子进程统一使用 PowerShell 
 避开 Node 22 的 Windows 中文目录复制问题。共享 Node CLI 和路径断言使用
 原生真实路径解析，兼容 Windows 长短路径及目录别名。
 
-| Windows 入口 | 用途 |
-| --- | --- |
-| `release.ps1` | 默认只读计划，`-Publish` 执行完整发布 |
-| `bump-app-version.ps1` | 更新 App 四处版本、commit 和 app tag |
-| `bump-cv-code-version.ps1` | 更新 CV code 版本、commit 和 code tag |
-| `build-cv.ps1` | 构建全部 CV ZIP，`-Mode code` / `runtime` 单独构建 |
-| `release-cv-code.ps1` | 上传 code ZIP、验证 R2/CDN，打印 URL 与 SHA |
-| `release-cv-runtime.ps1` | 上传 runtime、更新清单、commit 和平台 tag |
-| `build-windows.ps1` | 检查并构建 NSIS，`-Unsigned` 用于本地验证 |
-| `release-tauri-updater.ps1` | 构建签名 NSIS 并合并、发布 updater manifest |
-| `release-installer.ps1` | 发布版本化和 latest 的直接安装包下载；`-Unsigned` 发布手动安装包，不改 updater |
-| `prepare-windows-adb.ps1` | 获取并校验固定版本 Windows ADB |
-| `generate-icons.ps1` | 使用 Tauri CLI 从源图片生成应用图标 |
+| Windows 入口                | 用途                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------ |
+| `release.ps1`               | 默认只读计划，`-Publish` 执行完整发布                                          |
+| `bump-app-version.ps1`      | 更新 App 四处版本、commit 和 app tag                                           |
+| `bump-cv-code-version.ps1`  | 更新 CV code 版本、commit 和 code tag                                          |
+| `build-cv.ps1`              | 构建全部 CV ZIP，`-Mode code` / `runtime` 单独构建                             |
+| `release-cv-code.ps1`       | 上传 code ZIP、验证 R2/CDN，打印 URL 与 SHA                                    |
+| `release-cv-runtime.ps1`    | 上传 runtime、更新清单、commit 和平台 tag                                      |
+| `build-windows.ps1`         | 检查并构建 NSIS，`-Unsigned` 用于本地验证                                      |
+| `release-tauri-updater.ps1` | 构建签名 NSIS 并合并、发布 updater manifest                                    |
+| `release-installer.ps1`     | 发布版本化和 latest 的直接安装包下载；`-Unsigned` 发布手动安装包，不改 updater |
+| `prepare-windows-adb.ps1`   | 获取并校验固定版本 Windows ADB                                                 |
+| `generate-icons.ps1`        | 使用 Tauri CLI 从源图片生成应用图标                                            |
 
 上述路径均相对于 `scripts/windows/`。脚本内部定位仓库根目录，调用方
 无需先 `cd`；下方示例从仓库根目录执行。
@@ -167,5 +167,14 @@ runtime 版本相对目标平台递增；CV code 版本仍跨平台共用。
 发布脚本要求干净工作区和准确的 `vX.Y.Z` tag。不同平台必须串行发布：
 脚本合并同版本已有平台，拒绝覆盖更高版本的 channel，以及已登记的不同
 签名 artifact。新版本不会继承上一版本的安装包。macOS 的 Bash updater
-入口使用相同合并逻辑。CI 的 Windows workflow 只验证和保存构建产物，
-不会向 CDN 发布。
+入口使用相同合并逻辑。CI 已拆分为前端、Rust、CV 三个 workflow；普通检查
+不会构建 App 安装包。需要 NSIS 时，手动运行 Rust tests 并勾选
+`build_installer`，构建产物保存在 Actions，不会向 CDN 发布。
+
+## CI 测试
+
+| Workflow       | 平台           | 内容与触发范围                                                                                         |
+| -------------- | -------------- | ------------------------------------------------------------------------------------------------------ |
+| `frontend.yml` | Ubuntu         | 前端源码、配置或依赖变更：ESLint、TypeScript、Vitest、Vite 构建                                        |
+| `rust.yml`     | Windows、macOS | Rust/Tauri 变更：Cargo 测试；发布脚本、Tauri 资源、前端依赖及发布 skill 变更：独立的脚本测试           |
+| `cv.yml`       | Windows、macOS | CV 源码、测试、依赖、模板或构建输入变更：pytest；影响运行时/code ZIP 时额外执行 Windows 打包及集成测试 |
