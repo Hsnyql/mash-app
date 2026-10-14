@@ -4775,79 +4775,124 @@ fn extra_picks(
 
 #[test]
 fn extra_grand_dual_np_prefers_same_color_and_main_deputy_order() {
-    let picks = extra_picks(
-        GrandClass::Extra1Fire,
-        vec![
-            command_card(0, Some(30), Some("q"), None),
-            command_card(1, Some(10), Some("a"), None),
-            command_card(2, Some(20), Some("a"), None),
-        ],
-        vec![np_slot(0, true), np_slot(1, true), np_slot(2, false)],
-        vec![
-            grand_config(10, "arts", "damage"),
-            grand_config_at(1, 20, "arts", "damage"),
-        ],
-    );
+    for grand_class in [GrandClass::Extra1Fire, GrandClass::Assassin] {
+        let picks = extra_picks(
+            grand_class,
+            vec![
+                command_card(0, Some(30), Some("q"), None),
+                command_card(1, Some(10), Some("a"), None),
+                command_card(2, Some(20), Some("a"), None),
+            ],
+            vec![np_slot(0, true), np_slot(1, true), np_slot(2, false)],
+            vec![
+                grand_config(10, "arts", "damage"),
+                grand_config_at(1, 20, "arts", "damage"),
+            ],
+        );
 
-    assert_eq!(pick_labels(&picks), vec!["NP0", "NP1", "C1"]);
+        assert_eq!(pick_labels(&picks), vec!["NP0", "NP1", "C1"]);
+    }
 }
 
 #[test]
 fn extra_grand_main_np_prefers_same_color_brave_chain_before_fallback() {
-    let picks = extra_picks(
-        GrandClass::Extra2Wind,
-        vec![
-            command_card(0, Some(10), Some("a"), None),
-            command_card(1, Some(10), Some("a"), None),
-            command_card(2, Some(20), Some("a"), None),
-            command_card(3, Some(30), Some("a"), None),
-        ],
-        vec![np_slot(0, true), np_slot(1, false), np_slot(2, false)],
-        vec![
-            grand_config(10, "arts", "damage"),
-            grand_config_at(1, 20, "arts", "damage"),
-        ],
-    );
+    for grand_class in [GrandClass::Extra2Wind, GrandClass::Assassin] {
+        let picks = extra_picks(
+            grand_class,
+            vec![
+                command_card(0, Some(10), Some("a"), None),
+                command_card(1, Some(10), Some("a"), None),
+                command_card(2, Some(20), Some("a"), None),
+                command_card(3, Some(30), Some("a"), None),
+            ],
+            vec![np_slot(0, true), np_slot(1, false), np_slot(2, false)],
+            vec![
+                grand_config(10, "arts", "damage"),
+                grand_config_at(1, 20, "arts", "damage"),
+            ],
+        );
 
-    assert_eq!(pick_labels(&picks), vec!["NP0", "C0", "C1"]);
+        assert_eq!(pick_labels(&picks), vec!["NP0", "C0", "C1"]);
+    }
 }
 
 #[test]
 fn extra_earth_without_optional_single_skips_single_related_rules() {
-    let picks = extra_picks(
-        GrandClass::Extra1Earth,
-        vec![
-            command_card(0, Some(30), Some("a"), None),
-            command_card(1, Some(10), Some("b"), None),
-            command_card(2, Some(30), Some("q"), None),
-            command_card(3, Some(30), Some("a"), None),
-        ],
-        vec![np_slot(0, true), np_slot(1, false), np_slot(2, false)],
-        vec![grand_config(10, "buster", "damage")],
-    );
+    for grand_class in [GrandClass::Extra1Earth, GrandClass::Assassin] {
+        let picks = extra_picks(
+            grand_class,
+            vec![
+                command_card(0, Some(30), Some("a"), None),
+                command_card(1, Some(10), Some("b"), None),
+                command_card(2, Some(30), Some("q"), None),
+                command_card(3, Some(30), Some("a"), None),
+            ],
+            vec![np_slot(0, true), np_slot(1, false), np_slot(2, false)],
+            vec![grand_config(10, "buster", "damage")],
+        );
 
-    assert_eq!(pick_labels(&picks), vec!["NP0", "C1", "C0"]);
+        assert_eq!(pick_labels(&picks), vec!["NP0", "C1", "C0"]);
+    }
 }
 
 #[test]
 fn extra_filler_prefers_main_then_deputy_then_other_and_b_a_q() {
+    for grand_class in [GrandClass::Extra2Water, GrandClass::Assassin] {
+        let picks = extra_picks(
+            grand_class,
+            vec![
+                command_card(0, Some(30), Some("a"), None),
+                command_card(1, Some(20), Some("b"), None),
+                command_card(2, Some(10), Some("b"), None),
+                command_card(3, Some(10), Some("q"), None),
+                command_card(4, Some(10), Some("a"), None),
+            ],
+            Vec::new(),
+            vec![
+                grand_config(10, "buster", "damage"),
+                grand_config_at(1, 20, "buster", "damage"),
+            ],
+        );
+
+        assert_eq!(pick_labels(&picks), vec!["C2", "C4", "C3"]);
+    }
+}
+
+#[test]
+fn assassin_grand_uses_default_np_fallbacks_and_incomplete_hand_order() {
+    let grands = vec![
+        grand_config(10, "buster", "damage"),
+        grand_config_at(1, 20, "arts", "damage"),
+    ];
+    let cards = vec![
+        command_card(0, Some(30), Some("b"), None),
+        command_card(1, Some(20), Some("b"), None),
+        command_card(2, Some(10), Some("q"), None),
+        command_card(3, Some(10), Some("a"), None),
+    ];
+    for (main_ready, deputy_ready, expected) in [
+        (true, true, vec!["NP0", "NP1", "C3"]),
+        (true, false, vec!["NP0", "C2", "C3"]),
+        (false, true, vec!["NP1", "C3", "C1"]),
+    ] {
+        let picks = extra_picks(
+            GrandClass::Assassin,
+            cards.clone(),
+            vec![np_slot(0, main_ready), np_slot(1, deputy_ready)],
+            grands.clone(),
+        );
+        assert_eq!(pick_labels(&picks), expected);
+    }
     let picks = extra_picks(
-        GrandClass::Extra2Water,
+        GrandClass::Assassin,
         vec![
-            command_card(0, Some(30), Some("a"), None),
-            command_card(1, Some(20), Some("b"), None),
-            command_card(2, Some(10), Some("b"), None),
-            command_card(3, Some(10), Some("q"), None),
-            command_card(4, Some(10), Some("a"), None),
+            command_card(0, Some(10), Some("q"), None),
+            command_card(1, Some(10), Some("b"), None),
         ],
         Vec::new(),
-        vec![
-            grand_config(10, "buster", "damage"),
-            grand_config_at(1, 20, "buster", "damage"),
-        ],
+        grands,
     );
-
-    assert_eq!(pick_labels(&picks), vec!["C2", "C4", "C3"]);
+    assert_eq!(pick_labels(&picks), vec!["C1", "C0"]);
 }
 
 #[test]
@@ -5677,6 +5722,18 @@ fn run_config_round_trips_rider_grand_class() {
     assert_eq!(cfg.grand_class, GrandClass::Rider);
     let serialized = serde_json::to_value(&cfg).unwrap();
     assert_eq!(serialized["grandClass"], serde_json::json!("rider"));
+}
+
+#[test]
+fn run_config_round_trips_assassin_grand_class() {
+    let mut payload = minimal_run_config_json();
+    payload["grandClass"] = serde_json::json!("assassin");
+
+    let cfg: RunConfig = serde_json::from_value(payload).unwrap();
+
+    assert_eq!(cfg.grand_class, GrandClass::Assassin);
+    let serialized = serde_json::to_value(&cfg).unwrap();
+    assert_eq!(serialized["grandClass"], serde_json::json!("assassin"));
 }
 
 #[test]

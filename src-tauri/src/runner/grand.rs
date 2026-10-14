@@ -5,12 +5,14 @@
 
 use super::*;
 
+mod assassin;
 mod berserker;
 mod extra;
 mod lancer;
 mod rider;
 mod saber;
 
+use assassin::AssassinStrategy;
 use berserker::BerserkerStrategy;
 use extra::ExtraStrategy;
 use lancer::LancerStrategy;
@@ -20,6 +22,7 @@ use saber::SaberStrategy;
 static SABER_STRATEGY: SaberStrategy = SaberStrategy;
 static LANCER_STRATEGY: LancerStrategy = LancerStrategy;
 static RIDER_STRATEGY: RiderStrategy = RiderStrategy;
+static ASSASSIN_STRATEGY: AssassinStrategy = AssassinStrategy;
 static BERSERKER_STRATEGY: BerserkerStrategy = BerserkerStrategy;
 static EXTRA1_FIRE_STRATEGY: ExtraStrategy = ExtraStrategy::fire();
 static EXTRA1_EARTH_STRATEGY: ExtraStrategy = ExtraStrategy::earth();
@@ -130,11 +133,12 @@ pub(crate) trait GrandClassStrategy: Sync {
     }
 }
 
-pub(crate) fn grand_class_strategies() -> [&'static dyn GrandClassStrategy; 8] {
+pub(crate) fn grand_class_strategies() -> [&'static dyn GrandClassStrategy; 9] {
     [
         &SABER_STRATEGY,
         &LANCER_STRATEGY,
         &RIDER_STRATEGY,
+        &ASSASSIN_STRATEGY,
         &BERSERKER_STRATEGY,
         &EXTRA1_FIRE_STRATEGY,
         &EXTRA1_EARTH_STRATEGY,
@@ -777,6 +781,13 @@ mod registry_tests {
         assert!(grand_strategy(GrandClass::Rider)
             .validate_servants(&[servant(0, "main")])
             .is_ok());
+        let assassin = grand_strategy(GrandClass::Assassin);
+        assert!(assassin.validate_servants(&[servant(0, "main")]).is_ok());
+        assert!(assassin
+            .validate_servants(&[servant(0, "main"), servant(1, "deputy")])
+            .is_ok());
+        assert!(assassin.validate_servants(&[]).is_err());
+        assert!(assassin.validate_servants(&[servant(0, "deputy")]).is_err());
         assert!(grand_strategy(GrandClass::Extra1Earth)
             .validate_servants(&[servant(0, "aoe")])
             .is_ok());
@@ -799,6 +810,25 @@ mod registry_tests {
         assert!(rider.roles[0].required);
         assert_eq!(rider.roles[1].role, "deputy");
         assert!(!rider.roles[1].required);
+    }
+
+    #[test]
+    fn assassin_definition_uses_fire_and_wind_roles() {
+        let assassin = grand_strategy(GrandClass::Assassin).definition();
+        assert_eq!(assassin.label, "杀阶冠位");
+        assert_eq!(assassin.servant_class, "Assassin");
+        assert!(assassin.selection_group.is_none());
+        assert!(!assassin.card_priority_enabled);
+        assert_eq!(assassin.auto_order_change_roles, vec!["main"]);
+        for class in [GrandClass::Extra1Fire, GrandClass::Extra2Wind] {
+            let extra = grand_strategy(class).definition();
+            assert_eq!(assassin.roles.len(), extra.roles.len());
+            for (actual, expected) in assassin.roles.iter().zip(extra.roles.iter()) {
+                assert_eq!(actual.role, expected.role);
+                assert_eq!(actual.label, expected.label);
+                assert_eq!(actual.required, expected.required);
+            }
+        }
     }
 
     #[test]
