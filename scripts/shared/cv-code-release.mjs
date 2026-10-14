@@ -84,7 +84,8 @@ export function validateReports(receipt, directory) {
   }
 }
 export async function downloadDigest(url, fetcher = fetch) {
-  const response = await fetcher(url, { signal: AbortSignal.timeout(300000), cache: "no-store" });
+  const response = await fetcher(url, { signal: AbortSignal.timeout(300000), cache: "no-store",
+    headers: { "User-Agent": "mash-release/1.0" } });
   if (!response.ok) throw new Error(`Download failed: ${response.status} ${url}`);
   const hash = createHash("sha256");
   for await (const chunk of response.body) hash.update(chunk);
