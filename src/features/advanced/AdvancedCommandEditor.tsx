@@ -246,7 +246,6 @@ function AdvancedPreparationActionSummary({
       <span className="command-row-outcome">
       {orderChangeSlots?.front != null && orderChangeSlots.back != null ? (
         <>
-          <span className="battle-action-to">换位</span>
           <AdvancedInlineFace
             servant={partyLineup[orderChangeSlots.front] ?? null}
             index={orderChangeSlots.front}
