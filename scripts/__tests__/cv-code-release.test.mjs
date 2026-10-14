@@ -161,7 +161,13 @@ test("CDN failure can retry the original artifact without overwriting it", async
 test("CDN verification hashes the complete body and propagates HTTP failures", async t => {
   const f = fixture(t);
   f.write("code.zip", "full response");
-  assert.equal(await downloadDigest("https://example.invalid/code.zip", async () => new Response("full response")), digest("code.zip"));
+  assert.equal(await downloadDigest("https://example.invalid/code.zip", async (url, options) => {
+    assert.equal(url, "https://example.invalid/code.zip");
+    assert.equal(options.headers["User-Agent"], "mash-release/1.0");
+    assert.equal(options.cache, "no-store");
+    assert.equal(options.signal.aborted, false);
+    return new Response("full response");
+  }), digest("code.zip"));
   await assert.rejects(downloadDigest("https://example.invalid/code.zip", async () => new Response("", { status: 404 })), /404/);
 });
 

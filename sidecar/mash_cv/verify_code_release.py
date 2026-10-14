@@ -29,7 +29,8 @@ def digest(path: Path) -> str:
 def download(url: str, output: Path, expected: str) -> None:
     if not url.startswith("https://"):
         raise ValueError("Runtime URL must use HTTPS")
-    with urllib.request.urlopen(url, timeout=300) as response, output.open("wb") as file:
+    request = urllib.request.Request(url, headers={"User-Agent": "mash-release/1.0"})
+    with urllib.request.urlopen(request, timeout=300) as response, output.open("wb") as file:
         shutil.copyfileobj(response, file)
     if digest(output) != expected:
         output.unlink()
@@ -43,7 +44,8 @@ def extract(archive_path: Path, destination: Path, root: str) -> Path:
     with zipfile.ZipFile(archive_path) as archive:
         for entry in archive.infolist():
             relative = PurePosixPath(entry.filename)
-            if (relative.is_absolute() or not relative.parts or relative.parts[0] != root
+            if (entry.orig_filename != entry.filename or relative.is_absolute()
+                    or not relative.parts or relative.parts[0] != root
                     or ".." in relative.parts or "\\" in entry.filename or ":" in entry.filename):
                 raise ValueError("Invalid ZIP entry path")
             output = destination.joinpath(*relative.parts)

@@ -21,11 +21,35 @@ def release(monkeypatch):
 
 
 @pytest.mark.parametrize("name", ["../outside", "mash-cv-code/../outside", "/mash-cv-code/x",
-                                  "mash-cv-code\\outside", "wrong-root/file", "mash-cv-code/C:/x"])
+                                  "mash-cv-code\\outside", "wrong-root/file", "mash-cv-code/C:/x",
+                                  "mash-cv-code/file\0hidden"])
 def test_extract_rejects_paths_outside_the_bundle(release, tmp_path, name):
     archive = tmp_path / "code.zip"
     with zipfile.ZipFile(archive, "w") as file:
-        file.writestr(name, "bad")
+        # ZipInfo normalizes separators on Windows and truncates NUL bytes.
+        # Restore the raw filename so the archive really contains bad input.
+        entry = zipfile.ZipInfo(name)
+        entry.filename = name
+        file.writestr(entry, "bad")
+    with zipfile.ZipFile(archive) as file:
+        assert [entry.orig_filename for entry in file.infolist()] == [name]
+    with pytest.raises(ValueError, match="ZIP entry"):
+        release.extract(archive, tmp_path / "extract", "mash-cv-code")
+
+
+def test_extract_rejects_raw_backslashes_even_when_zipfile_normalizes_them(release, tmp_path, monkeypatch):
+    archive = tmp_path / "code.zip"
+    entry = zipfile.ZipInfo("mash-cv-code\\outside")
+    entry.filename = entry.orig_filename
+    with zipfile.ZipFile(archive, "w") as file:
+        file.writestr(entry, "bad")
+
+    class WindowsZipInfo(zipfile.ZipInfo):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.filename = self.filename.replace("\\", "/")
+
+    monkeypatch.setattr(zipfile, "ZipInfo", WindowsZipInfo)
     with pytest.raises(ValueError, match="ZIP entry"):
         release.extract(archive, tmp_path / "extract", "mash-cv-code")
 
@@ -97,6 +121,22 @@ def test_smoke_fails_on_process_errors_or_missing_ocr_reply(release, tmp_path, m
     monkeypatch.setattr(release.subprocess, "run", lambda *args, **kwargs: result)
     with pytest.raises(RuntimeError, match="Frozen CV"):
         release.smoke(executable, code, models, tmp_path)
+
+
+def test_download_uses_release_user_agent_and_verifies_runtime_hash(release, tmp_path, monkeypatch):
+    source = tmp_path / "source.zip"
+    source.write_bytes(b"published runtime")
+
+    def urlopen(request, **kwargs):
+        assert request.full_url == "https://example.invalid/runtime.zip"
+        assert request.get_header("User-agent") == "mash-release/1.0"
+        assert kwargs["timeout"] == 300
+        return source.open("rb")
+
+    monkeypatch.setattr(release.urllib.request, "urlopen", urlopen)
+    output = tmp_path / "download.zip"
+    release.download("https://example.invalid/runtime.zip", output, release.digest(source))
+    assert output.read_bytes() == source.read_bytes()
 
 
 def test_download_rejects_incorrect_runtime_hash(release, tmp_path, monkeypatch):
