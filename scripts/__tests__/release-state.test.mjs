@@ -104,13 +104,14 @@ test("invalid bump or missing lock entry fails before changing version files", t
   assert.throws(() => f.run("version", "app", "1.1.0"), /Missing mash package/);
   assert.equal(f.read("versions.toml"), original);
 });
-test("CV manifest updates preserve other platforms and the other artifact fields", t => {
+test("CV code is shared by all platforms while runtime updates stay platform-specific", t => {
   const f = fixture(t);
   const mac = JSON.parse(f.read("src-tauri/resources/runtime-manifest.json")).platforms["darwin-aarch64"];
   f.run("artifact", "runtime", "1.1.0", "windows-x86_64", "https://example.invalid/win.zip", "c".repeat(64));
   f.run("artifact", "code", "1.2.0", "windows-x86_64", "https://example.invalid/code.zip", "d".repeat(64));
   const doc = JSON.parse(f.read("src-tauri/resources/runtime-manifest.json"));
-  assert.deepEqual(doc.platforms["darwin-aarch64"], mac);
+  assert.deepEqual(doc.platforms["darwin-aarch64"], { ...mac,
+    codeUrl: "https://example.invalid/code.zip", codeSha256: "d".repeat(64) });
   assert.equal(doc.platforms["windows-x86_64"].runtimeSha256, "c".repeat(64));
   assert.equal(doc.platforms["windows-x86_64"].runtimeVersion, "1.1.0");
   assert.equal(doc.mashCvRuntimeVersion, undefined);

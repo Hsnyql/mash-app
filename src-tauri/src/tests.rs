@@ -2530,15 +2530,16 @@ fn windows_runtime_manifest_and_installer_are_configured() {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
-#[ignore = "requires locally built Windows CV ZIPs; run explicitly in CV CI"]
-fn locally_built_windows_bundles_install_and_report_ready() {
+#[ignore = "requires locally built native CV ZIPs; run explicitly in CV CI"]
+fn locally_built_platform_bundles_install_and_report_ready() {
     let mut manifest = parse_runtime_manifest(RUNTIME_MANIFEST_JSON).unwrap();
     let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sidecar/mash_cv/dist");
+    let platform = runtime_platform_key();
     let runtime = dist.join(format!(
-        "mash-cv-runtime-windows-x86_64-v{}.zip",
-        manifest.platforms["windows-x86_64"].runtime_version
+        "mash-cv-runtime-{}-v{}.zip",
+        platform, manifest.platforms[&platform].runtime_version
     ));
     let code = dist.join(format!(
         "mash-cv-code-v{}.zip",
@@ -2557,20 +2558,18 @@ fn locally_built_windows_bundles_install_and_report_ready() {
     // Native runtime builds embed host-specific paths/timestamps. Validate a
     // fresh local build against its own artifact hashes, as release tooling
     // does, rather than requiring byte identity with the published build.
-    let artifact = manifest.platforms.get_mut("windows-x86_64").unwrap();
+    let artifact = manifest.platforms.get_mut(&platform).unwrap();
     artifact.runtime_sha256 = sha256_file(&runtime).unwrap();
     artifact.code_sha256 = sha256_file(&code).unwrap();
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("中文 runtime");
     for path in [&runtime, &code] {
-        import_runtime_bundle_from_zip_path(path, &manifest, &root, "windows-x86_64").unwrap();
+        import_runtime_bundle_from_zip_path(path, &manifest, &root, &platform).unwrap();
     }
-    let status = runtime_status_from_manifest(&manifest, &root, "windows-x86_64");
+    let status = runtime_status_from_manifest(&manifest, &root, &platform);
     assert!(status.installed);
-    assert!(status.executable_path.ends_with("mash-cv.exe"));
-    assert!(
-        runtime_models_path(&root, &manifest.platforms["windows-x86_64"].runtime_version).is_dir()
-    );
+    assert!(status.executable_path.ends_with(runtime_exe_name()));
+    assert!(runtime_models_path(&root, &manifest.platforms[&platform].runtime_version).is_dir());
 }
 
 #[test]
