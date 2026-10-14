@@ -91,6 +91,21 @@ impl BattleState {
         transition
     }
 
+    pub(crate) fn observe_battle_load(
+        &mut self,
+        screen: Screen,
+        at: Instant,
+        timeout_count: u32,
+    ) -> BattleLoadGate {
+        self.transition(BattleFlowEvent::BattleLoadObserved {
+            screen,
+            at,
+            timeout_count,
+        })
+        .battle_load_gate
+        .unwrap_or(BattleLoadGate::NotWaiting)
+    }
+
     pub(crate) fn awaiting_attack_resolution(&self) -> bool {
         matches!(
             self.flow,
@@ -127,8 +142,12 @@ pub(crate) enum BattleFlowState {
     PreBattle,
     /// The runner tapped a button that should eventually lead back to an
     /// actionable Battle screen. Unknown frames are expected while loading.
-    AwaitingBattleLoad { source: BattleLoadSource },
-    /// Battle screen is actionable and the runner may execute skills or tap Attack.
+    AwaitingBattleLoad {
+        source: BattleLoadSource,
+        wait: BattleLoadWait,
+    },
+    /// Battle screen is visible; the handler still probes the attack button
+    /// before executing skills or tapping Attack.
     BattleReady,
     /// Attack was tapped on Battle; suppress duplicate taps until Attack appears
     /// or the wait times out.
@@ -149,13 +168,28 @@ pub(crate) enum BattleLoadSource {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BattleFlowEvent {
-    QuestStartTapped(BattleLoadSource),
+    QuestStartTapped {
+        source: BattleLoadSource,
+        at: Instant,
+    },
+    BattleLoadObserved {
+        screen: Screen,
+        at: Instant,
+        timeout_count: u32,
+    },
+    BattleLoadRetryDeferred,
     BattleActionable,
-    AttackButtonTapped { at: Instant },
+    AttackButtonTapped {
+        at: Instant,
+    },
     AttackScreenDetected,
     AttackScreenWaitTimedOut,
-    AttackCardsSubmitted { at: Instant },
-    PostAttackHudWaitStarted { at: Instant },
+    AttackCardsSubmitted {
+        at: Instant,
+    },
+    PostAttackHudWaitStarted {
+        at: Instant,
+    },
     PostAttackHudResolved,
 }
 
@@ -165,15 +199,48 @@ pub(crate) struct BattleFlowTransition {
     pub(crate) event: BattleFlowEvent,
     pub(crate) next: BattleFlowState,
     pub(crate) accepted: bool,
+    pub(crate) battle_load_gate: Option<BattleLoadGate>,
 }
 
 pub(crate) fn battle_flow_transition(
     state: BattleFlowState,
     event: BattleFlowEvent,
 ) -> BattleFlowTransition {
+    let mut battle_load_gate = None;
     let next = match (state, event) {
-        (_, BattleFlowEvent::QuestStartTapped(source)) => {
-            Some(BattleFlowState::AwaitingBattleLoad { source })
+        (
+            BattleFlowState::AwaitingBattleLoad { mut wait, .. },
+            BattleFlowEvent::QuestStartTapped { source, at },
+        ) => {
+            wait.last_tap_at = at;
+            wait.tap_attempts += 1;
+            wait.team_confirm_polls = 0;
+            Some(BattleFlowState::AwaitingBattleLoad { source, wait })
+        }
+        (BattleFlowState::PreBattle, BattleFlowEvent::QuestStartTapped { source, at }) => {
+            Some(BattleFlowState::AwaitingBattleLoad {
+                source,
+                wait: BattleLoadWait::new(at),
+            })
+        }
+        (
+            BattleFlowState::AwaitingBattleLoad { source, wait },
+            BattleFlowEvent::BattleLoadObserved {
+                screen,
+                at,
+                timeout_count,
+            },
+        ) => {
+            let (next, gate) = observe_battle_load_wait(source, wait, screen, at, timeout_count);
+            battle_load_gate = Some(gate);
+            Some(next)
+        }
+        (
+            BattleFlowState::AwaitingBattleLoad { source, mut wait },
+            BattleFlowEvent::BattleLoadRetryDeferred,
+        ) => {
+            wait.team_confirm_polls = 0;
+            Some(BattleFlowState::AwaitingBattleLoad { source, wait })
         }
         (
             BattleFlowState::PreBattle
@@ -187,6 +254,7 @@ pub(crate) fn battle_flow_transition(
         }
         (
             BattleFlowState::PreBattle
+            | BattleFlowState::AwaitingBattleLoad { .. }
             | BattleFlowState::BattleReady
             | BattleFlowState::AwaitingAttackScreen { .. },
             BattleFlowEvent::AttackScreenDetected,
@@ -223,7 +291,80 @@ pub(crate) fn battle_flow_transition(
         event,
         next: next.unwrap_or(state),
         accepted: next.is_some(),
+        battle_load_gate,
     }
+}
+
+const QUEST_START_RETRY_DELAY: Duration = Duration::from_secs(3);
+const QUEST_START_STABLE_POLLS: u32 = 2;
+const QUEST_START_MAX_TAP_ATTEMPTS: u32 = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BattleLoadWait {
+    last_tap_at: Instant,
+    tap_attempts: u32,
+    polls: u32,
+    team_confirm_polls: u32,
+}
+
+impl BattleLoadWait {
+    pub(crate) fn new(at: Instant) -> Self {
+        Self {
+            last_tap_at: at,
+            tap_attempts: 1,
+            polls: 0,
+            team_confirm_polls: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BattleLoadGate {
+    NotWaiting,
+    Waiting,
+    RetryStart { attempt: u32 },
+    TimedOut,
+    StartRetriesExhausted,
+}
+
+fn observe_battle_load_wait(
+    source: BattleLoadSource,
+    mut wait: BattleLoadWait,
+    screen: Screen,
+    at: Instant,
+    timeout_count: u32,
+) -> (BattleFlowState, BattleLoadGate) {
+    // Only an actual destination or the AP dialog releases the start guard.
+    // Other screen labels can be transient misclassifications while loading.
+    match screen {
+        Screen::Battle => return (BattleFlowState::BattleReady, BattleLoadGate::NotWaiting),
+        Screen::Attack => return (BattleFlowState::AttackScreen, BattleLoadGate::NotWaiting),
+        Screen::APRecovery => return (BattleFlowState::PreBattle, BattleLoadGate::NotWaiting),
+        _ => {}
+    }
+
+    wait.polls = wait.polls.saturating_add(1);
+    wait.team_confirm_polls = if screen == Screen::TeamConfirm
+        && at.saturating_duration_since(wait.last_tap_at) >= QUEST_START_RETRY_DELAY
+    {
+        wait.team_confirm_polls.saturating_add(1)
+    } else {
+        0
+    };
+    let gate = if wait.polls >= timeout_count {
+        BattleLoadGate::TimedOut
+    } else if wait.team_confirm_polls >= QUEST_START_STABLE_POLLS {
+        if wait.tap_attempts >= QUEST_START_MAX_TAP_ATTEMPTS {
+            BattleLoadGate::StartRetriesExhausted
+        } else {
+            BattleLoadGate::RetryStart {
+                attempt: wait.tap_attempts + 1,
+            }
+        }
+    } else {
+        BattleLoadGate::Waiting
+    };
+    (BattleFlowState::AwaitingBattleLoad { source, wait }, gate)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

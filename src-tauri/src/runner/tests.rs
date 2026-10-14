@@ -1509,14 +1509,16 @@ fn battle_flow_runs_full_attack_cycle_through_explicit_states() {
     let mut battle = BattleState::new();
     let started_at = Instant::now();
 
-    let loading = battle.transition(BattleFlowEvent::QuestStartTapped(
-        BattleLoadSource::TeamConfirm,
-    ));
+    let loading = battle.transition(BattleFlowEvent::QuestStartTapped {
+        source: BattleLoadSource::TeamConfirm,
+        at: started_at,
+    });
     assert!(loading.accepted);
     assert_eq!(
         battle.flow,
         BattleFlowState::AwaitingBattleLoad {
-            source: BattleLoadSource::TeamConfirm
+            source: BattleLoadSource::TeamConfirm,
+            wait: BattleLoadWait::new(started_at),
         }
     );
 
@@ -1562,6 +1564,301 @@ fn battle_flow_runs_full_attack_cycle_through_explicit_states() {
     assert!(resolved.accepted);
     assert_eq!(battle.flow, BattleFlowState::BattleReady);
     assert!(!battle.awaiting_attack_resolution());
+}
+
+#[test]
+fn battle_load_ignores_setup_frames_during_start_grace_period() {
+    let mut battle = BattleState::new();
+    let at = Instant::now();
+    battle.transition(BattleFlowEvent::QuestStartTapped {
+        source: BattleLoadSource::TeamConfirm,
+        at,
+    });
+    for (index, screen) in [
+        Screen::TeamConfirm,
+        Screen::TeamConfirm,
+        Screen::Unknown,
+        Screen::TeamChange,
+        Screen::SupportSelect,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            battle.observe_battle_load(screen, at + Duration::from_millis(500 * index as u64), 100),
+            BattleLoadGate::Waiting
+        );
+        assert!(matches!(
+            battle.flow,
+            BattleFlowState::AwaitingBattleLoad { .. }
+        ));
+    }
+}
+
+#[test]
+fn battle_load_retries_only_after_delay_and_consecutive_team_confirm_polls() {
+    let mut battle = BattleState::new();
+    let at = Instant::now();
+    battle.transition(BattleFlowEvent::QuestStartTapped {
+        source: BattleLoadSource::TeamConfirm,
+        at,
+    });
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_millis(2999), 100),
+        BattleLoadGate::Waiting
+    );
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_secs(3), 100),
+        BattleLoadGate::Waiting
+    );
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_millis(3500), 100),
+        BattleLoadGate::RetryStart { attempt: 2 }
+    );
+    let retry_at = at + Duration::from_millis(3500);
+    battle.transition(BattleFlowEvent::QuestStartTapped {
+        source: BattleLoadSource::TeamConfirm,
+        at: retry_at,
+    });
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, retry_at + Duration::from_secs(2), 100),
+        BattleLoadGate::Waiting
+    );
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, retry_at + Duration::from_secs(3), 100),
+        BattleLoadGate::Waiting
+    );
+    assert_eq!(
+        battle.observe_battle_load(
+            Screen::TeamConfirm,
+            retry_at + Duration::from_millis(3500),
+            100
+        ),
+        BattleLoadGate::RetryStart { attempt: 3 }
+    );
+}
+
+#[test]
+fn battle_load_unknown_and_other_screens_break_retry_confirmation() {
+    for screen in [
+        Screen::Unknown,
+        Screen::SupportSelect,
+        Screen::TeamChange,
+        Screen::ServantSelect,
+    ] {
+        let mut battle = BattleState::new();
+        let at = Instant::now();
+        battle.transition(BattleFlowEvent::QuestStartTapped {
+            source: BattleLoadSource::TeamConfirm,
+            at,
+        });
+        assert_eq!(
+            battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_secs(4), 100),
+            BattleLoadGate::Waiting
+        );
+        assert_eq!(
+            battle.observe_battle_load(screen, at + Duration::from_secs(5), 100),
+            BattleLoadGate::Waiting
+        );
+        assert_eq!(
+            battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_secs(6), 100),
+            BattleLoadGate::Waiting
+        );
+        assert_eq!(
+            battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_secs(7), 100),
+            BattleLoadGate::RetryStart { attempt: 2 }
+        );
+    }
+}
+
+#[test]
+fn battle_load_changed_retry_snapshot_requires_fresh_stability() {
+    let mut battle = BattleState::new();
+    let at = Instant::now();
+    battle.transition(BattleFlowEvent::QuestStartTapped {
+        source: BattleLoadSource::TeamConfirm,
+        at,
+    });
+    battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_secs(4), 100);
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_secs(5), 100),
+        BattleLoadGate::RetryStart { attempt: 2 }
+    );
+    assert!(
+        battle
+            .transition(BattleFlowEvent::BattleLoadRetryDeferred)
+            .accepted
+    );
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_secs(6), 100),
+        BattleLoadGate::Waiting
+    );
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_secs(7), 100),
+        BattleLoadGate::RetryStart { attempt: 2 }
+    );
+}
+
+#[test]
+fn battle_load_limits_successful_taps_to_initial_plus_two_retries() {
+    let mut battle = BattleState::new();
+    let at = Instant::now();
+    battle.transition(BattleFlowEvent::QuestStartTapped {
+        source: BattleLoadSource::TeamConfirm,
+        at,
+    });
+    for attempt in 2..=3 {
+        let poll_at = at + Duration::from_secs(4 * (attempt - 1) as u64);
+        assert_eq!(
+            battle.observe_battle_load(Screen::TeamConfirm, poll_at, 100),
+            BattleLoadGate::Waiting
+        );
+        assert_eq!(
+            battle.observe_battle_load(
+                Screen::TeamConfirm,
+                poll_at + Duration::from_millis(500),
+                100
+            ),
+            BattleLoadGate::RetryStart { attempt }
+        );
+        battle.transition(BattleFlowEvent::QuestStartTapped {
+            source: BattleLoadSource::TeamConfirm,
+            at: poll_at + Duration::from_millis(500),
+        });
+    }
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_secs(12), 100),
+        BattleLoadGate::Waiting
+    );
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_secs(13), 100),
+        BattleLoadGate::StartRetriesExhausted
+    );
+}
+
+#[test]
+fn battle_load_timeout_counts_mixed_frames_and_survives_a_retry() {
+    let mut battle = BattleState::new();
+    let at = Instant::now();
+    battle.transition(BattleFlowEvent::QuestStartTapped {
+        source: BattleLoadSource::TeamConfirm,
+        at,
+    });
+    assert_eq!(
+        battle.observe_battle_load(Screen::Unknown, at + Duration::from_secs(1), 5),
+        BattleLoadGate::Waiting
+    );
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_secs(4), 5),
+        BattleLoadGate::Waiting
+    );
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_secs(5), 5),
+        BattleLoadGate::RetryStart { attempt: 2 }
+    );
+    battle.transition(BattleFlowEvent::QuestStartTapped {
+        source: BattleLoadSource::TeamConfirm,
+        at: at + Duration::from_secs(5),
+    });
+    assert_eq!(
+        battle.observe_battle_load(Screen::Unknown, at + Duration::from_secs(6), 5),
+        BattleLoadGate::Waiting
+    );
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_secs(7), 5),
+        BattleLoadGate::TimedOut
+    );
+}
+
+#[test]
+fn battle_load_waits_through_unknown_until_battle_or_attack_arrives() {
+    for (screen, flow) in [
+        (Screen::Battle, BattleFlowState::BattleReady),
+        (Screen::Attack, BattleFlowState::AttackScreen),
+    ] {
+        let mut battle = BattleState::new();
+        let at = Instant::now();
+        battle.transition(BattleFlowEvent::QuestStartTapped {
+            source: BattleLoadSource::TeamConfirm,
+            at,
+        });
+        for seconds in 1..4 {
+            assert_eq!(
+                battle.observe_battle_load(Screen::Unknown, at + Duration::from_secs(seconds), 4),
+                BattleLoadGate::Waiting
+            );
+        }
+        // A destination arriving on the final allowed poll is still success.
+        assert_eq!(
+            battle.observe_battle_load(screen, at + Duration::from_secs(4), 4),
+            BattleLoadGate::NotWaiting
+        );
+        assert_eq!(battle.flow, flow);
+        assert_eq!(
+            battle.observe_battle_load(Screen::Unknown, at + Duration::from_secs(5), 4),
+            BattleLoadGate::NotWaiting
+        );
+    }
+}
+
+#[test]
+fn battle_load_ap_recovery_releases_guard_and_allows_a_fresh_start() {
+    let mut battle = BattleState::new();
+    let at = Instant::now();
+    battle.transition(BattleFlowEvent::QuestStartTapped {
+        source: BattleLoadSource::TeamConfirm,
+        at,
+    });
+    assert_eq!(
+        battle.observe_battle_load(Screen::APRecovery, at + Duration::from_secs(1), 100),
+        BattleLoadGate::NotWaiting
+    );
+    assert_eq!(battle.flow, BattleFlowState::PreBattle);
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, at + Duration::from_secs(2), 100),
+        BattleLoadGate::NotWaiting
+    );
+    let restarted_at = at + Duration::from_secs(3);
+    assert!(
+        battle
+            .transition(BattleFlowEvent::QuestStartTapped {
+                source: BattleLoadSource::TeamConfirm,
+                at: restarted_at
+            })
+            .accepted
+    );
+    assert_eq!(
+        battle.flow,
+        BattleFlowState::AwaitingBattleLoad {
+            source: BattleLoadSource::TeamConfirm,
+            wait: BattleLoadWait::new(restarted_at)
+        }
+    );
+}
+
+#[test]
+fn battle_load_guard_is_not_active_without_a_successful_start_tap() {
+    let mut battle = BattleState::new();
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, Instant::now(), 100),
+        BattleLoadGate::NotWaiting
+    );
+    assert_eq!(battle.flow, BattleFlowState::PreBattle);
+    battle.transition(BattleFlowEvent::BattleActionable);
+    assert!(
+        !battle
+            .transition(BattleFlowEvent::QuestStartTapped {
+                source: BattleLoadSource::TeamConfirm,
+                at: Instant::now()
+            })
+            .accepted
+    );
+    // Settlement replaces BattleState, so the next quest starts unverified.
+    battle = BattleState::new();
+    assert_eq!(
+        battle.observe_battle_load(Screen::TeamConfirm, Instant::now(), 100),
+        BattleLoadGate::NotWaiting
+    );
 }
 
 #[test]
