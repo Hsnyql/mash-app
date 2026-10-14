@@ -15,6 +15,10 @@ WebView2 bootstrapper；缺少 WebView2 时，安装仍需联网下载运行时�
 位于 `scripts/shared/`。Windows 使用 PowerShell 5.1 或 7；所有 Windows
 入口均不依赖 WSL、Git Bash、`zip` 或 `shasum`。
 
+Windows CI 及 `pnpm test:scripts` 的 Windows 子进程统一使用 PowerShell 7
+（`pwsh`），本地运行这组测试时也需要将 `pwsh` 加入 PATH。发布脚本测试
+保留含中文和空格的临时目录，验证脚本路径与工作目录能够正确传递。
+
 | Windows 入口 | 用途 |
 | --- | --- |
 | `release.ps1` | 默认只读计划，`-Publish` 执行完整发布 |

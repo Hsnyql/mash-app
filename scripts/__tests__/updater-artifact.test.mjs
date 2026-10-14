@@ -99,7 +99,7 @@ test("PowerShell publisher selects the current artifact despite retained old sig
   const selection = source.slice(source.indexOf("    $artifact = Invoke-Native"), source.indexOf("    $prefix ="));
   const script = `$ErrorActionPreference = 'Stop'; . '${path.join(repoRoot, "scripts/windows/common.ps1").replaceAll("'", "''")}'; $bundle = '${root.replaceAll("'", "''")}'; ` +
     `$target = 'windows-x86_64';\n${selection}\nSplit-Path -Leaf $artifact\n$signature`;
-  const output = execFileSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+  const output = execFileSync("pwsh", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
     { cwd: repoRoot, encoding: "utf8", windowsHide: true });
   assert.equal(output.replaceAll("\r\n", "\n").trim(), `${currentInstaller}\nsignature`);
 });

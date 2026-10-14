@@ -150,15 +150,15 @@ test("changelog finalization handles CRLF and preserves the release notes", t =>
 });
 test("PowerShell entry point prints its plan without creating files or tags", { skip: !windows }, t => {
   const f = fixture(t);
-  const output = invoke("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(f.root, "scripts/windows/release.ps1"), "1.1.0", "-Installer"], f.root);
+  const output = invoke("pwsh", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(f.root, "scripts/windows/release.ps1"), "1.1.0", "-Installer"], f.root);
   assert.match(output, /No files, tags, artifacts or remote refs changed/);
   assert.match(output, /scripts\/windows\/release-installer.ps1/);
   assert.equal(f.git("status", "--porcelain"), "");
   assert.equal(f.git("tag", "--list", "v1.1.0"), "");
 });
 test("PowerShell native failures propagate instead of continuing release steps", { skip: !windows }, () => {
-  const script = `. ${ps(path.join(repo, "scripts/windows/common.ps1"))}; Invoke-Native powershell.exe @('-NoProfile', '-Command', 'exit 9'); 'UNEXPECTED'`;
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { encoding: "utf8", windowsHide: true });
+  const script = `. ${ps(path.join(repo, "scripts/windows/common.ps1"))}; Invoke-Native pwsh @('-NoProfile', '-Command', 'exit 9'); 'UNEXPECTED'`;
+  const result = spawnSync("pwsh", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { encoding: "utf8", windowsHide: true });
   assert.equal(result.status, 1);
   assert.doesNotMatch(result.stdout, /UNEXPECTED/);
   assert.match(result.stderr, /failed \(exit 9\)/);
@@ -170,7 +170,7 @@ test("Windows full release runs offline through CV, updater and installer public
   f.write("scripts/windows/prepare-windows-adb.ps1", "Write-Host 'Fixture ADB ready'\n");
   f.commit();
   const bootstrap = path.join(repo, "scripts/__tests__/fixtures/offline-release.ps1");
-  const output = invoke("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", bootstrap], f.root);
+  const output = invoke("pwsh", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", bootstrap], f.root);
   assert.match(output, /Release complete: v1.1.0/);
   assert.equal(f.git("status", "--porcelain"), "");
   for (const tag of ["v1.1.0", "cv-code/1.1.0", "cv-runtime/windows-x86_64/1.1.0"]) {
