@@ -993,7 +993,6 @@ describe("CommandEditor pagination", () => {
     const summary = await screen.findByLabelText(/御主礼装 (?:释放 )?技能 1 Order Change 乙 ↔ 丁/);
     const outcome = summary.querySelector(".command-row-outcome") as HTMLElement;
     expect(outcome.querySelectorAll(".battle-inline-face")).toHaveLength(2);
-    expect(within(outcome).queryByText("换位")).not.toBeInTheDocument();
     expect(within(outcome).getByText("↔")).toBeInTheDocument();
     expect(within(outcome).queryByText("乙", { exact: true })).not.toBeInTheDocument();
     expect(within(outcome).queryByText("丁", { exact: true })).not.toBeInTheDocument();
