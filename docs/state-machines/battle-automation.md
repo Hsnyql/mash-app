@@ -50,10 +50,6 @@ stateDiagram-v2
     APRecovery --> TeamConfirm: 已恢复
 ```
 
-从者自动放置目前刻意禁用。Runner 仍在 `RunConfig` 接受 `servantSelections`，但在功能完成适配前，`TeamConfirm` 会忽略它们；助战与现有队伍状态准备好后即直接开始关卡。
-
-项目配置御主礼装时，`TeamConfirm` 在点击开始任务前检查左下角图标，搜索区域为 `(x=0.007, y=0.88, w=0.073, h=0.12)`。礼装模板以 1920×1080 下的 84×84 像素为基准，按当前 CV 帧宽高换算到一个固定尺寸（2560×1440 时为 112×112），仅匹配一次；透明背景合成到灰度 224，匹配阈值为 0.62。模板缺失、检测出错或得分未达阈值时停止运行，日志保留匹配得分。
-
 ## 内部流程状态机
 
 `Screen` 是 CV classifier 输出。战斗 runner 的权威流程状态是 `src-tauri/src/runner/state.rs` 的 `BattleFlowState`；screen observation 和已完成 action 以 `BattleFlowEvent` 进入。转换表集中在 `battle_flow_transition`，无效 event 不改变当前状态。
