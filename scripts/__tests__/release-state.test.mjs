@@ -5,11 +5,11 @@ import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { pwshArgs, psLiteral as ps } from "./helpers/pwsh.mjs";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 const helper = path.join(repo, "scripts/shared/release-state.mjs");
 const windows = process.platform === "win32";
-const ps = (value) => `'${value.replaceAll("'", "''")}'`;
 const invoke = (command, args, cwd) => execFileSync(command, args, {
   cwd, encoding: "utf8", windowsHide: true, stdio: "pipe",
 });
@@ -40,8 +40,11 @@ function fixture(t) {
   write("CHANGELOG.md", "# Changes\n\n## 未发布\n\nRelease notes\n");
   write("sidecar/mash_cv/build_sidecar.py", "# fixture builder\n");
   write(".gitignore", "sidecar/mash_cv/dist/\nsrc-tauri/target/\n*.log\n");
-  fs.cpSync(path.join(repo, "scripts/windows"), path.join(root, "scripts/windows"), { recursive: true });
-  fs.cpSync(path.join(repo, "scripts/shared"), path.join(root, "scripts/shared"), { recursive: true });
+  // Node 22's native recursive copier converts Unicode Windows paths through
+  // std::filesystem. A filter keeps directory traversal in the JS implementation.
+  const copyOptions = { recursive: true, filter: () => true };
+  fs.cpSync(path.join(repo, "scripts/windows"), path.join(root, "scripts/windows"), copyOptions);
+  fs.cpSync(path.join(repo, "scripts/shared"), path.join(root, "scripts/shared"), copyOptions);
   const git = (...args) => invoke("git", args, root).trim();
   git("init", "--quiet");
   git("config", "core.autocrlf", "false");
@@ -56,6 +59,33 @@ function fixture(t) {
   const run = (...args) => invoke(process.execPath, [helper, ...args], root);
   return { root, write, git, commit, run, read: name => fs.readFileSync(path.join(root, name), "utf8") };
 }
+
+test("release fixture copies scripts into the Unicode directory", t => {
+  const f = fixture(t);
+  for (const name of ["scripts/windows/release.ps1", "scripts/shared/release-state.mjs"]) {
+    assert.equal(f.read(name), fs.readFileSync(path.join(repo, name), "utf8"));
+  }
+});
+
+test("shared release CLIs execute through a directory alias", t => {
+  const f = fixture(t);
+  const alias = path.join(f.root, "shared alias");
+  fs.symlinkSync(path.join(f.root, "scripts/shared"), alias, windows ? "junction" : "dir");
+  const run = (name, ...args) => invoke(process.execPath, [path.join(alias, name), ...args], f.root);
+  assert.equal(JSON.parse(run("release-state.mjs", "versions")).app, "1.0.0");
+  run("release-state.mjs", "version", "app", "1.1.0");
+  assert.equal(JSON.parse(f.read("src-tauri/tauri.conf.json")).version, "1.1.0");
+
+  const installer = "src-tauri/target/release/bundle/nsis/Mash_1.1.0_x64-setup.exe";
+  f.write(installer, "fixture installer");
+  f.write(`${installer}.sig`, "fixture signature");
+  const artifact = run("updater-artifact.mjs", "src-tauri/target/release/bundle", "src-tauri/tauri.conf.json", "windows-x86_64");
+  assert.equal(fs.realpathSync.native(artifact), fs.realpathSync.native(path.join(f.root, installer)));
+
+  run("updater-manifest.mjs", "latest.json", "1.1.0", "2026-10-14T00:00:00Z", "windows-x86_64",
+    "https://example.invalid/installer.exe", "fixture signature");
+  assert.equal(JSON.parse(f.read("latest.json")).platforms["windows-x86_64"].signature, "fixture signature");
+});
 
 test("app bump aligns four files and leaves unrelated lock packages untouched", t => {
   const f = fixture(t);
@@ -150,15 +180,16 @@ test("changelog finalization handles CRLF and preserves the release notes", t =>
 });
 test("PowerShell entry point prints its plan without creating files or tags", { skip: !windows }, t => {
   const f = fixture(t);
-  const output = invoke("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(f.root, "scripts/windows/release.ps1"), "1.1.0", "-Installer"], f.root);
+  const script = `& ${ps(path.join(f.root, "scripts/windows/release.ps1"))} 1.1.0 -Installer`;
+  const output = invoke("pwsh", pwshArgs(script, f.root), repo);
   assert.match(output, /No files, tags, artifacts or remote refs changed/);
   assert.match(output, /scripts\/windows\/release-installer.ps1/);
   assert.equal(f.git("status", "--porcelain"), "");
   assert.equal(f.git("tag", "--list", "v1.1.0"), "");
 });
 test("PowerShell native failures propagate instead of continuing release steps", { skip: !windows }, () => {
-  const script = `. ${ps(path.join(repo, "scripts/windows/common.ps1"))}; Invoke-Native powershell.exe @('-NoProfile', '-Command', 'exit 9'); 'UNEXPECTED'`;
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { encoding: "utf8", windowsHide: true });
+  const script = `. ${ps(path.join(repo, "scripts/windows/common.ps1"))}; Invoke-Native pwsh @('-NoProfile', '-Command', 'exit 9'); 'UNEXPECTED'`;
+  const result = spawnSync("pwsh", pwshArgs(script, repo), { cwd: repo, encoding: "utf8", windowsHide: true });
   assert.equal(result.status, 1);
   assert.doesNotMatch(result.stdout, /UNEXPECTED/);
   assert.match(result.stderr, /failed \(exit 9\)/);
@@ -170,7 +201,7 @@ test("Windows full release runs offline through CV, updater and installer public
   f.write("scripts/windows/prepare-windows-adb.ps1", "Write-Host 'Fixture ADB ready'\n");
   f.commit();
   const bootstrap = path.join(repo, "scripts/__tests__/fixtures/offline-release.ps1");
-  const output = invoke("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", bootstrap], f.root);
+  const output = invoke("pwsh", pwshArgs(`& ${ps(bootstrap)}`, f.root), repo);
   assert.match(output, /Release complete: v1.1.0/);
   assert.equal(f.git("status", "--porcelain"), "");
   for (const tag of ["v1.1.0", "cv-code/1.1.0", "cv-runtime/windows-x86_64/1.1.0"]) {

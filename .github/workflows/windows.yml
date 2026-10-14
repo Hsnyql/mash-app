@@ -13,6 +13,9 @@ jobs:
   windows-x64:
     runs-on: windows-latest
     timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -23,7 +26,6 @@ jobs:
           python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
       - name: Install frontend dependencies
-        shell: pwsh
         run: |
           corepack enable
           corepack prepare pnpm@10.32.0 --activate
@@ -41,7 +43,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           poetry run pytest tests/test_windows_runtime.py
       - name: Test and build Windows installer
-        shell: pwsh
         run: ./scripts/windows/build-windows.ps1 -Unsigned
       - uses: actions/upload-artifact@v4
         with:
