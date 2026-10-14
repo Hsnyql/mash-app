@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { selectUpdaterArtifact } from "../shared/updater-artifact.mjs";
+import { pwshArgs, psLiteral } from "./helpers/pwsh.mjs";
 
 const config = { productName: "Mash", version: "0.14.0" };
 const helper = fileURLToPath(new URL("../shared/updater-artifact.mjs", import.meta.url));
@@ -97,9 +98,9 @@ test("PowerShell publisher selects the current artifact despite retained old sig
   write(root, `nsis/${currentInstaller}`);
   const source = fs.readFileSync(new URL("../windows/release-tauri-updater.ps1", import.meta.url), "utf8");
   const selection = source.slice(source.indexOf("    $artifact = Invoke-Native"), source.indexOf("    $prefix ="));
-  const script = `$ErrorActionPreference = 'Stop'; . '${path.join(repoRoot, "scripts/windows/common.ps1").replaceAll("'", "''")}'; $bundle = '${root.replaceAll("'", "''")}'; ` +
+  const script = `. ${psLiteral(path.join(repoRoot, "scripts/windows/common.ps1"))}; $bundle = ${psLiteral(root)}; ` +
     `$target = 'windows-x86_64';\n${selection}\nSplit-Path -Leaf $artifact\n$signature`;
-  const output = execFileSync("pwsh", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+  const output = execFileSync("pwsh", pwshArgs(script, repoRoot),
     { cwd: repoRoot, encoding: "utf8", windowsHide: true });
   assert.equal(output.replaceAll("\r\n", "\n").trim(), `${currentInstaller}\nsignature`);
 });

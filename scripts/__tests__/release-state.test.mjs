@@ -5,11 +5,11 @@ import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { pwshArgs, psLiteral as ps } from "./helpers/pwsh.mjs";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 const helper = path.join(repo, "scripts/shared/release-state.mjs");
 const windows = process.platform === "win32";
-const ps = (value) => `'${value.replaceAll("'", "''")}'`;
 const invoke = (command, args, cwd) => execFileSync(command, args, {
   cwd, encoding: "utf8", windowsHide: true, stdio: "pipe",
 });
@@ -56,6 +56,26 @@ function fixture(t) {
   const run = (...args) => invoke(process.execPath, [helper, ...args], root);
   return { root, write, git, commit, run, read: name => fs.readFileSync(path.join(root, name), "utf8") };
 }
+
+test("shared release CLIs execute through a directory alias", t => {
+  const f = fixture(t);
+  const alias = path.join(f.root, "shared alias");
+  fs.symlinkSync(path.join(f.root, "scripts/shared"), alias, windows ? "junction" : "dir");
+  const run = (name, ...args) => invoke(process.execPath, [path.join(alias, name), ...args], f.root);
+  assert.equal(JSON.parse(run("release-state.mjs", "versions")).app, "1.0.0");
+  run("release-state.mjs", "version", "app", "1.1.0");
+  assert.equal(JSON.parse(f.read("src-tauri/tauri.conf.json")).version, "1.1.0");
+
+  const installer = "src-tauri/target/release/bundle/nsis/Mash_1.1.0_x64-setup.exe";
+  f.write(installer, "fixture installer");
+  f.write(`${installer}.sig`, "fixture signature");
+  const artifact = run("updater-artifact.mjs", "src-tauri/target/release/bundle", "src-tauri/tauri.conf.json", "windows-x86_64");
+  assert.equal(fs.realpathSync(artifact), fs.realpathSync(path.join(f.root, installer)));
+
+  run("updater-manifest.mjs", "latest.json", "1.1.0", "2026-10-14T00:00:00Z", "windows-x86_64",
+    "https://example.invalid/installer.exe", "fixture signature");
+  assert.equal(JSON.parse(f.read("latest.json")).platforms["windows-x86_64"].signature, "fixture signature");
+});
 
 test("app bump aligns four files and leaves unrelated lock packages untouched", t => {
   const f = fixture(t);
@@ -150,7 +170,8 @@ test("changelog finalization handles CRLF and preserves the release notes", t =>
 });
 test("PowerShell entry point prints its plan without creating files or tags", { skip: !windows }, t => {
   const f = fixture(t);
-  const output = invoke("pwsh", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(f.root, "scripts/windows/release.ps1"), "1.1.0", "-Installer"], f.root);
+  const script = `& ${ps(path.join(f.root, "scripts/windows/release.ps1"))} 1.1.0 -Installer`;
+  const output = invoke("pwsh", pwshArgs(script, f.root), repo);
   assert.match(output, /No files, tags, artifacts or remote refs changed/);
   assert.match(output, /scripts\/windows\/release-installer.ps1/);
   assert.equal(f.git("status", "--porcelain"), "");
@@ -158,7 +179,7 @@ test("PowerShell entry point prints its plan without creating files or tags", { 
 });
 test("PowerShell native failures propagate instead of continuing release steps", { skip: !windows }, () => {
   const script = `. ${ps(path.join(repo, "scripts/windows/common.ps1"))}; Invoke-Native pwsh @('-NoProfile', '-Command', 'exit 9'); 'UNEXPECTED'`;
-  const result = spawnSync("pwsh", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], { encoding: "utf8", windowsHide: true });
+  const result = spawnSync("pwsh", pwshArgs(script, repo), { cwd: repo, encoding: "utf8", windowsHide: true });
   assert.equal(result.status, 1);
   assert.doesNotMatch(result.stdout, /UNEXPECTED/);
   assert.match(result.stderr, /failed \(exit 9\)/);
@@ -170,7 +191,7 @@ test("Windows full release runs offline through CV, updater and installer public
   f.write("scripts/windows/prepare-windows-adb.ps1", "Write-Host 'Fixture ADB ready'\n");
   f.commit();
   const bootstrap = path.join(repo, "scripts/__tests__/fixtures/offline-release.ps1");
-  const output = invoke("pwsh", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", bootstrap], f.root);
+  const output = invoke("pwsh", pwshArgs(`& ${ps(bootstrap)}`, f.root), repo);
   assert.match(output, /Release complete: v1.1.0/);
   assert.equal(f.git("status", "--porcelain"), "");
   for (const tag of ["v1.1.0", "cv-code/1.1.0", "cv-runtime/windows-x86_64/1.1.0"]) {

@@ -63,7 +63,7 @@ export function mergeUpdaterManifest(release, previous = null, channel = null) {
     pub_date: sameVersion?.pub_date ?? pubDate, platforms };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
   const [out, version, pubDate, target, url, signature, previousPath, channelPath] = process.argv.slice(2);
   const read = path => path && fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, "utf8")) : null;
   const doc = mergeUpdaterManifest({ version, pubDate, target, url, signature }, read(previousPath), read(channelPath));

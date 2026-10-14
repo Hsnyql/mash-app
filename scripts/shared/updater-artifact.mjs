@@ -24,7 +24,7 @@ export function selectUpdaterArtifact(bundleDir, config, target, requireSignatur
   return artifact;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
   const [bundleDir, configPath, target] = process.argv.slice(2);
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   // Forward slashes also keep basename and file reads working under Git Bash.
