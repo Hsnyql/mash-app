@@ -65,6 +65,14 @@ impl Runner {
                 return;
             }
 
+            if self.handle_battle_load_screen(screen) {
+                if matches!(*self.state.lock().unwrap(), RunnerState::Error { .. }) {
+                    return;
+                }
+                thread::sleep(POLL_INTERVAL);
+                continue;
+            }
+
             if screen != Screen::BattleResultContinue {
                 self.battle_result_continue_handled = false;
             }
@@ -240,6 +248,48 @@ impl Runner {
     }
 
     // -- battle screen handlers ----------------------------------------------
+
+    /// Consume transient screen observations after a successful start tap.
+    /// Keep the normal screen router from treating them as fresh setup pages.
+    fn handle_battle_load_screen(&mut self, screen: Screen) -> bool {
+        match self.battle.observe_battle_load(
+            screen,
+            Instant::now(),
+            self.config.unknown_screen_timeout_count,
+        ) {
+            BattleLoadGate::NotWaiting => false,
+            BattleLoadGate::Waiting => {
+                self.emit("TeamConfirm", "等待进入战斗页面…");
+                true
+            }
+            BattleLoadGate::RetryStart { attempt } => {
+                self.retry_quest_start(attempt);
+                true
+            }
+            gate @ (BattleLoadGate::TimedOut | BattleLoadGate::StartRetriesExhausted) => {
+                let message = if gate == BattleLoadGate::TimedOut {
+                    "等待进入战斗超时"
+                } else {
+                    "开始任务点击后仍停留在队伍确认页，已达到重试上限"
+                };
+                self.transition_lifecycle(RunnerLifecycleEvent::Failed {
+                    message: message.into(),
+                });
+                self.emit("TeamConfirm", &format!("{message}，已停止"));
+                if self.config.auto_capture_unknown_screen_timeout {
+                    match self.capture_unknown_screen_timeout_screenshot() {
+                        Ok(path) => self.emit(
+                            "TeamConfirm",
+                            &format!("开始任务超时截图已保存: {}", path.display()),
+                        ),
+                        Err(err) => self
+                            .emit_warn("TeamConfirm", &format!("开始任务超时截图保存失败: {err}")),
+                    }
+                }
+                true
+            }
+        }
+    }
 
     fn handle_battle(&mut self) {
         match attack_screen_wait_gate(

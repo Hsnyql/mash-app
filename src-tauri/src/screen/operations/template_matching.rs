@@ -39,16 +39,15 @@ impl SidecarClient {
         }
     }
 
-    /// Search for an arbitrary template across a list of scales and return
-    /// the best match. The sidecar keeps the highest score even when it is
-    /// below `threshold`, which lets callers include useful diagnostics.
-    pub fn find_region_multiscale(
+    /// Resize an outfit template to one fixed pixel size and match it once.
+    /// The sidecar returns the score even below `threshold` for diagnostics.
+    pub fn find_region_with_template_size(
         &mut self,
         image_path: Option<&Path>,
         template_path: &Path,
         region: NormRect,
         threshold: f64,
-        scales: &[f64],
+        template_size: (u32, u32),
     ) -> Result<ElementMatch, String> {
         let mut req = request(
             SidecarCommand::FindRegion,
@@ -61,7 +60,7 @@ impl SidecarClient {
                     "h": region.h,
                 },
                 "threshold": threshold,
-                "scales": scales,
+                "templateSize": { "w": template_size.0, "h": template_size.1 },
                 "alphaMask": true,
                 "alphaBackground": 224,
             }),
@@ -70,7 +69,7 @@ impl SidecarClient {
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|value| value.as_str()) {
             return Err(format!(
-                "find_region_multiscale({}): {err}",
+                "find_region_with_template_size({}): {err}",
                 template_path.display()
             ));
         }

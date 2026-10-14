@@ -50,8 +50,6 @@ stateDiagram-v2
     APRecovery --> TeamConfirm: 已恢复
 ```
 
-从者自动放置目前刻意禁用。Runner 仍在 `RunConfig` 接受 `servantSelections`，但在功能完成适配前，`TeamConfirm` 会忽略它们；助战与现有队伍状态准备好后即直接开始关卡。
-
 ## 内部流程状态机
 
 `Screen` 是 CV classifier 输出。战斗 runner 的权威流程状态是 `src-tauri/src/runner/state.rs` 的 `BattleFlowState`；screen observation 和已完成 action 以 `BattleFlowEvent` 进入。转换表集中在 `battle_flow_transition`，无效 event 不改变当前状态。
@@ -60,6 +58,10 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> PreBattle
     PreBattle --> AwaitingBattleLoad: QuestStartTapped(TeamConfirm)
+    AwaitingBattleLoad --> AwaitingBattleLoad: 过渡画面等待；稳定确认漏点后有限重试
+    AwaitingBattleLoad --> PreBattle: BattleLoadObserved(APRecovery)
+    AwaitingBattleLoad --> BattleReady: BattleLoadObserved(Battle)
+    AwaitingBattleLoad --> AttackScreen: BattleLoadObserved(Attack)
     AwaitingBattleLoad --> BattleReady: BattleActionable
     PreBattle --> BattleReady: BattleActionable（中途启动）
     BattleReady --> AwaitingAttackScreen: AttackButtonTapped
@@ -76,6 +78,10 @@ stateDiagram-v2
 ```
 
 - `BattleFlowState` 管理加载、等待 Attack 画面、已提交卡片和攻击后 HUD 等短暂流程事实；此前这些事实由独立 boolean/timestamp 表示。
+- `TeamConfirm` 在每次开始点击前固定一张临时 PNG；页面识别（同时要求队伍 strip 和开始按钮）及御主礼装匹配共用该帧。临时截图随校验结束删除。成功匹配记录礼装 ID、得分和阈值；未配置礼装时跳过匹配。
+- 只有点击命令成功才发出 `QuestStartTapped` 并进入 `AwaitingBattleLoad`，命令失败沿用点击失败停止路径。等待期间主循环只观察页面，不再执行队伍确认、助战选择等战前操作，也不重新检测礼装。`Battle` 或 `Attack` 到达后恢复战斗处理；进入 `Battle` 后仍需确认攻击按钮可用才执行行动。
+- 漏点重试要求距上次成功发出点击至少 3 秒，且之后连续两次识别为 `TeamConfirm`；随后再用一张当前帧确认页面及开始按钮，并校验礼装，才补点。当前帧已离开队伍确认页时取消该次补点、清空连续确认次数并继续等待。最多点击 3 次（首次加 2 次补点）；重试仍停留于队伍确认页则停止并报告重试上限。`Unknown` 及其他过渡页面均会清空连续确认次数，不触发补点。
+- 加载等待独立累计所有尚未到达目标的画面次数，使用全局“识别超时”阈值；不会因 `TeamConfirm` / `Unknown` 交替或补点而重置。超时报告“等待进入战斗超时”，开启超时截图时保存当前帧。观察到 `APRecovery` 时释放开始等待状态并处理恢复；返回队伍确认页后重新校验并开始。结算重置 `BattleState` 后，下一轮同样重新校验。
 - `BattleState` 管理持久上下文：当前 Battle/turn index、上次 HUD 场景读取、已执行的 scene/turn key、指令卡识别 fallback 状态、攻击前宝具条识别缓存，以及 advanced-mode control/skill-turn index。
 - 连续 `Unknown` 的停止阈值来自「游戏 → 基础设置」中的“识别超时”，所有流程共用同一个检测次数。每次主循环约 0.8 秒，范围为 50–1000 次，默认 100 次；关闭限制时内部阈值写为 9999 次。
 - `awaiting_attack_resolution()` 在 `AwaitingAttackResolution` 或 `AwaitingPostAttackHud` 时为真，避免 classifier 仍显示 Attack 时重复提交卡片。
@@ -192,7 +198,7 @@ JP 与 CN 项目配置任意 `supportStarMapScoreMin`、`supportGrandStarMapScor
 - 普通模式在指令卡识别前应用当前 turn 已执行且 `change_order_servants.json` timing 为 `immediate` 的 preparation effect；对先前 turn/Battle 还应用触发 `immediate` 撤退规则的 NP attack row，再应用 `endOfTurn` preparation rule。当前 turn 的 NP 和 `endOfTurn` 退出不会过早应用。`servant_{i}_all` 匹配该前排从者最左侧未使用的指令卡，不限 B/A/Q。队伍开启“优先选择暴击率更高的指令卡”后，普通和高级选卡会在操作日志输出五张卡的识别暴击率，并只在同一成员、同一色卡的等价候选之间以暴击率打破并列；任一等价候选未识别暴击率时仍按卡位排序。没有普通指令卡 row 且未开启本设置时，跳过归属识别而仍检测 NP；普通卡只作为从左到右 fallback 点击目标。已识别为指令卡封印、眩晕或沉睡的卡不再匹配从者头像，也不计入未知归属重试；选卡时先排除这些不可选卡，可选卡不足三张时再按卡位从左到右补齐。归属识别开启且当前前排配置满三位时，前三次只使用预期前排模板；连续三次完整读取仍有未知归属，才假定有人死亡并让后排入场，随后尝试所有六名配置成员的唯一 servant id。当前前排配置不足三位时仍要求五张卡面的 suit/icon 完整，但允许未识别到从者归属的可行动卡继续进入选卡，并记录 warning。
 - Advanced mode 使用 `advanced_battle_scenes.json`。Grand scene 的技能配置存储在 `turns[]`；旧配置若只有 `startupActions`，运行时仍将其视为 Turn 1。具有生效指令卡 startup condition 时先进入 Attack 等待启动；无生效条件时直接在 Battle 执行首个 control action 与 Turn 1，避免 Attack → Battle → Attack 往返。之后每次攻击结算返回 Battle，先执行下一个已配置 Turn 的技能，再进入 Attack；尚有 control action 时，每次指令卡攻击前执行一条。历史阵容按实际顺序重建：启动控制行动、Turn 1、后续控制行动、Turn 2，依次交错，确保中途 Order Change 后的技能仍解析到正确成员。若必须将后排主 Grand 自动 Order Change 到前排，则必须先识别五张卡、按当前前排拥有卡数选择换下目标（并列选最左），用 Mystic Code `skill_3` 换位，再满足启动条件。action 按原选中从者身份解析：后排主 Grand action 改写为其当前前排 slot，已换到后排的原成员 action 跳过。没有匹配启动条件时，可返回 Battle 依序执行每次一条 `controlActions`，再进入 Attack 以空 NP list 使用自动策略；所有 control action 用完后，后续未匹配回合保持同样的无 NP 自动攻击。Advanced 与 Grand 自动策略同样先排除不可选卡进行组合，不足三张时才按卡位从左到右补入不可选卡。存在旧版 advanced `rules` 时，仍使用旧 rule evaluator，而非三阶段策略。
 - Extra 戴冠战在创建队伍时先选择 `Extra1` / `Extra2`，再选择火／地或风／水。火、风使用主／副冠位（主必选、副可选）；地、水使用光炮／单体（光炮必选、单体可选）。四种副本共用自动出卡优先级：双宝具同色连携、双宝具普通连携、主输出同色追击连携、主输出追击连携、主输出宝具、次输出宝具，最后按冠位从者、主冠位及 Buster→Arts→Quick 顺序补位。地／水未配置单体时，依赖副角色的规则自然不匹配，直接进入仅光炮相关规则。
-- 内部 flow 在 `AwaitingBattleLoad` 和 `AwaitingAttackResolution` 延长 Unknown 容忍时间，以覆盖加载画面和长攻击动画，不再依赖独立 flags。
+- `AwaitingBattleLoad` 使用上面的独立等待计数与有限补点规则；`AwaitingAttackResolution` 保留提交保护，避免攻击动画期间重复选卡。
 - `APRecovery` 先按本次运行已确认的使用次数过滤达到单类上限的恢复道具；未设置上限的道具可无限使用，全部已达到上限时结束运行。随后以道具图标下方的标签为 anchor：国服依次检测旧版“物品” `label_item` 与新版“道具” `label_item_new`，日服继续检测原 `label_item`；任一命中即可进入道具扫描。按优先级扫描道具列模板而非点击固定行：顶页扫描彩虹／金／银道具，下滑一次后扫描铜苹果。模板未命中视为数量不足，因为变暗 overlay 会压低模板分数。点击道具后至少等待 500ms，再用共享 `button_dialog` 模板定位并点击确认按钮；圣晶石／黄金苹果使用上方弹窗 ROI，白银／青铜／赤铜苹果使用下方 ROI。确认后再等待 500ms：仍识别为 `APRecovery` 时继续等待，明确切换到其他页面时完成，`Unknown` 则立即交回主循环，以保留结算 banner 的跳过处理。
 
 修改 `Screen`、战斗结果处理、AP recovery 行为或战斗 screen variant probe 时，必须同步更新本文档。
