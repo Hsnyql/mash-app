@@ -108,6 +108,7 @@ pub enum GrandClass {
     Saber,
     Lancer,
     Rider,
+    Assassin,
     Berserker,
     Extra1Fire,
     Extra1Earth,
@@ -116,10 +117,11 @@ pub enum GrandClass {
 }
 
 impl GrandClass {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Saber,
         Self::Lancer,
         Self::Rider,
+        Self::Assassin,
         Self::Berserker,
         Self::Extra1Fire,
         Self::Extra1Earth,
