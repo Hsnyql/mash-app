@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 function parts(version) {
   const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(version);
@@ -63,7 +63,7 @@ export function mergeUpdaterManifest(release, previous = null, channel = null) {
     pub_date: sameVersion?.pub_date ?? pubDate, platforms };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
+if (process.argv[1] && fs.realpathSync.native(fileURLToPath(import.meta.url)) === fs.realpathSync.native(process.argv[1])) {
   const [out, version, pubDate, target, url, signature, previousPath, channelPath] = process.argv.slice(2);
   const read = path => path && fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, "utf8")) : null;
   const doc = mergeUpdaterManifest({ version, pubDate, target, url, signature }, read(previousPath), read(channelPath));

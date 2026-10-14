@@ -40,8 +40,11 @@ function fixture(t) {
   write("CHANGELOG.md", "# Changes\n\n## 未发布\n\nRelease notes\n");
   write("sidecar/mash_cv/build_sidecar.py", "# fixture builder\n");
   write(".gitignore", "sidecar/mash_cv/dist/\nsrc-tauri/target/\n*.log\n");
-  fs.cpSync(path.join(repo, "scripts/windows"), path.join(root, "scripts/windows"), { recursive: true });
-  fs.cpSync(path.join(repo, "scripts/shared"), path.join(root, "scripts/shared"), { recursive: true });
+  // Node 22's native recursive copier converts Unicode Windows paths through
+  // std::filesystem. A filter keeps directory traversal in the JS implementation.
+  const copyOptions = { recursive: true, filter: () => true };
+  fs.cpSync(path.join(repo, "scripts/windows"), path.join(root, "scripts/windows"), copyOptions);
+  fs.cpSync(path.join(repo, "scripts/shared"), path.join(root, "scripts/shared"), copyOptions);
   const git = (...args) => invoke("git", args, root).trim();
   git("init", "--quiet");
   git("config", "core.autocrlf", "false");
@@ -57,6 +60,13 @@ function fixture(t) {
   return { root, write, git, commit, run, read: name => fs.readFileSync(path.join(root, name), "utf8") };
 }
 
+test("release fixture copies scripts into the Unicode directory", t => {
+  const f = fixture(t);
+  for (const name of ["scripts/windows/release.ps1", "scripts/shared/release-state.mjs"]) {
+    assert.equal(f.read(name), fs.readFileSync(path.join(repo, name), "utf8"));
+  }
+});
+
 test("shared release CLIs execute through a directory alias", t => {
   const f = fixture(t);
   const alias = path.join(f.root, "shared alias");
@@ -70,7 +80,7 @@ test("shared release CLIs execute through a directory alias", t => {
   f.write(installer, "fixture installer");
   f.write(`${installer}.sig`, "fixture signature");
   const artifact = run("updater-artifact.mjs", "src-tauri/target/release/bundle", "src-tauri/tauri.conf.json", "windows-x86_64");
-  assert.equal(fs.realpathSync(artifact), fs.realpathSync(path.join(f.root, installer)));
+  assert.equal(fs.realpathSync.native(artifact), fs.realpathSync.native(path.join(f.root, installer)));
 
   run("updater-manifest.mjs", "latest.json", "1.1.0", "2026-10-14T00:00:00Z", "windows-x86_64",
     "https://example.invalid/installer.exe", "fixture signature");

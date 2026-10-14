@@ -19,8 +19,9 @@ Windows CI 及 `pnpm test:scripts` 的 Windows 子进程统一使用 PowerShell 
 （`pwsh`），本地运行这组测试时也需要将 `pwsh` 加入 PATH。发布脚本测试
 保留含中文和空格的临时目录，验证脚本路径与工作目录能够正确传递。
 测试通过 `pwsh -EncodedCommand` 传递命令，并在子进程内显式设置工作目录，
-避免 runner 的原始参数或启动目录传递丢失中文路径。共享 Node CLI 使用
-真实路径判断入口，兼容临时目录的短路径和目录别名。
+让含中文、空格和引号的路径按字面值传入脚本。fixture 使用 JS 递归复制，
+避开 Node 22 的 Windows 中文目录复制问题。共享 Node CLI 和路径断言使用
+原生真实路径解析，兼容 Windows 长短路径及目录别名。
 
 | Windows 入口 | 用途 |
 | --- | --- |

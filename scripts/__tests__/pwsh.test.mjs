@@ -32,7 +32,7 @@ test("pwsh preserves Unicode script paths, arguments and working directories", {
   });
   const actual = JSON.parse(output);
   assert.equal(actual.value, value);
-  assert.equal(fs.realpathSync(actual.cwd), fs.realpathSync(root));
-  assert.equal(fs.realpathSync(actual.script), fs.realpathSync(file));
+  assert.equal(fs.realpathSync.native(actual.cwd), fs.realpathSync.native(root));
+  assert.equal(fs.realpathSync.native(actual.script), fs.realpathSync.native(file));
   assert.equal(actual.marker, "fixture marker");
 });

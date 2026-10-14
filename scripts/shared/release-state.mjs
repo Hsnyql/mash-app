@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { compareVersions } from "./updater-manifest.mjs";
 
 const manifestPath = "src-tauri/resources/runtime-manifest.json";
@@ -122,7 +122,7 @@ export function releasePlan(app, code, runtime, platform, publish = false) {
   return { current, app, code, runtime, platform, tags, sameVersion, changelog: ready ? "ready" : "unreleased", codeChanged, runtimeChanged };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
+if (process.argv[1] && fs.realpathSync.native(fileURLToPath(import.meta.url)) === fs.realpathSync.native(process.argv[1])) {
   const [command, ...args] = process.argv.slice(2);
   switch (command) {
     case "versions": console.log(JSON.stringify(readVersions(args[0]))); break;

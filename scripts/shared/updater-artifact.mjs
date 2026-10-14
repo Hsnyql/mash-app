@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 // Select the output of the native build, without scanning retained old bundles.
 export function selectUpdaterArtifact(bundleDir, config, target, requireSignature = true) {
@@ -24,7 +24,7 @@ export function selectUpdaterArtifact(bundleDir, config, target, requireSignatur
   return artifact;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
+if (process.argv[1] && fs.realpathSync.native(fileURLToPath(import.meta.url)) === fs.realpathSync.native(process.argv[1])) {
   const [bundleDir, configPath, target] = process.argv.slice(2);
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   // Forward slashes also keep basename and file reads working under Git Bash.
