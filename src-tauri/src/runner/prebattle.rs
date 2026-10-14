@@ -60,9 +60,9 @@ impl Runner {
     }
 
     fn verify_selected_mystic_code(&mut self) -> bool {
-        if self.config.mystic_code_id.is_none() {
+        let Some(mystic_code_id) = self.config.mystic_code_id else {
             return true;
-        }
+        };
 
         let Some(template_path) = self.mystic_code_item_template.clone() else {
             self.warn_mystic_code_check_blocked(
@@ -80,6 +80,13 @@ impl Runner {
         );
         match result {
             Ok(match_result) if match_result.found => {
+                self.emit(
+                    "TeamConfirm",
+                    &format!(
+                        "御主礼装检测成功（ID {mystic_code_id}），多尺度最佳得分 {:.3}（阈值 {:.2}）",
+                        match_result.score, MYSTIC_CODE_ITEM_THRESHOLD
+                    ),
+                );
                 self.mystic_code_warning_emitted = false;
                 true
             }
