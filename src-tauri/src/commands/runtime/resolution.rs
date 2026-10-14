@@ -267,9 +267,10 @@ pub(crate) fn resolve_mystic_code_assets_dir(app: &tauri::AppHandle) -> Option<P
 /// under `app_data_dir()/runtime/mash-cv/<version>/mash-cv/`.
 pub(crate) fn resolve_sidecar_exe(app: &tauri::AppHandle) -> Option<PathBuf> {
     let manifest = runtime_manifest(app).ok()?;
+    let artifact = manifest.platforms.get(&runtime_platform_key())?;
     Some(runtime_executable_path(
         &runtime_root_dir(app),
-        &manifest.mash_cv_runtime_version,
+        &artifact.runtime_version,
     ))
 }
 
@@ -295,8 +296,9 @@ pub(crate) fn resolve_sidecar_code_dir(app: &tauri::AppHandle) -> Option<PathBuf
 
 pub(crate) fn resolve_sidecar_models_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
     let manifest = runtime_manifest(app).ok()?;
+    let artifact = manifest.platforms.get(&runtime_platform_key())?;
     Some(runtime_models_path(
         &runtime_root_dir(app),
-        &manifest.mash_cv_runtime_version,
+        &artifact.runtime_version,
     ))
 }

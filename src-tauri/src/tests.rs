@@ -502,7 +502,10 @@ fn app_color_theme_preserves_legacy_preferences_and_defaults_to_violet() {
     )
     .unwrap();
     assert_eq!(settings.color_theme, crate::paths::AppColorTheme::Violet);
-    assert_eq!(settings.active_project_id.as_deref(), Some("existing-project"));
+    assert_eq!(
+        settings.active_project_id.as_deref(),
+        Some("existing-project")
+    );
     assert_eq!(settings.theme.as_deref(), Some("dark"));
     assert_eq!(settings.battle_start_panel, BattleStartPanel::RunStatus);
 }
@@ -2428,10 +2431,10 @@ fn build_runtime_manifest(
 ) -> RuntimeManifest {
     parse_runtime_manifest(&format!(
         r#"{{
-                "mashCvRuntimeVersion": "{runtime_version}",
                 "mashCvCodeVersion": "{code_version}",
                 "platforms": {{
                     "{platform}": {{
+                        "runtimeVersion": "{runtime_version}",
                         "runtimeUrl": "https://cdn.example.com/runtime.zip",
                         "runtimeSha256": "{runtime_sha256}",
                         "codeUrl": "https://cdn.example.com/code.zip",
@@ -2457,7 +2460,7 @@ fn runtime_manifest_selects_platform_artifact() {
         "code-sha",
     );
     let artifact = manifest.platforms.get("darwin-aarch64").unwrap();
-    assert_eq!(manifest.mash_cv_runtime_version, "2026.05.08-runtime1");
+    assert_eq!(artifact.runtime_version, "2026.05.08-runtime1");
     assert_eq!(manifest.mash_cv_code_version, "2026.05.08-code1");
     assert_eq!(artifact.runtime_url, "https://cdn.example.com/runtime.zip");
     assert_eq!(artifact.runtime_sha256, "runtime-sha");
@@ -2534,7 +2537,7 @@ fn locally_built_windows_bundles_install_and_report_ready() {
     let dist = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sidecar/mash_cv/dist");
     let runtime = dist.join(format!(
         "mash-cv-runtime-windows-x86_64-v{}.zip",
-        manifest.mash_cv_runtime_version
+        manifest.platforms["windows-x86_64"].runtime_version
     ));
     let code = dist.join(format!(
         "mash-cv-code-v{}.zip",
@@ -2558,7 +2561,9 @@ fn locally_built_windows_bundles_install_and_report_ready() {
     let status = runtime_status_from_manifest(&manifest, &root, "windows-x86_64");
     assert!(status.installed);
     assert!(status.executable_path.ends_with("mash-cv.exe"));
-    assert!(runtime_models_path(&root, &manifest.mash_cv_runtime_version).is_dir());
+    assert!(
+        runtime_models_path(&root, &manifest.platforms["windows-x86_64"].runtime_version).is_dir()
+    );
 }
 
 #[test]
@@ -2617,6 +2622,70 @@ fn runtime_status_reports_missing_matching_and_stale_versions() {
     );
     assert_eq!(matching.installed_code_version.as_deref(), Some("code-v2"));
     assert!(matching.executable_path.ends_with(runtime_exe_name()));
+}
+
+#[test]
+fn runtime_install_and_status_use_independent_platform_versions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let exe_entry = format!("mash-cv-runtime/{}", runtime_exe_name());
+    let bytes = build_zip(&[(exe_entry.as_str(), b"runtime executable")]);
+    let zip_path = tmp.path().join("runtime.zip");
+    fs::write(&zip_path, &bytes).unwrap();
+    let mut manifest = build_runtime_manifest(
+        "2026.05.08-runtime1",
+        "0.4.26",
+        "darwin-aarch64",
+        &sha256_bytes(&bytes),
+        "code-sha",
+    );
+    let windows = build_runtime_manifest(
+        "0.1.0",
+        "0.4.26",
+        "windows-x86_64",
+        &sha256_bytes(&bytes),
+        "code-sha",
+    );
+    manifest.platforms.extend(windows.platforms);
+
+    for (platform, version) in [
+        ("darwin-aarch64", "2026.05.08-runtime1"),
+        ("windows-x86_64", "0.1.0"),
+    ] {
+        let root = tmp.path().join(platform);
+        let result =
+            import_runtime_bundle_from_zip_path(&zip_path, &manifest, &root, platform).unwrap();
+        assert_eq!(result.installed_version, version);
+        assert_eq!(read_runtime_version(&root).unwrap().version, version);
+        let status = runtime_status_from_manifest(&manifest, &root, platform);
+        assert_eq!(status.required_runtime_version, version);
+        assert_eq!(status.required_code_version, "0.4.26");
+        assert!(status.runtime_installed);
+        assert_eq!(
+            PathBuf::from(status.executable_path),
+            runtime_executable_path(&root, version)
+        );
+
+        let other = if platform == "darwin-aarch64" {
+            "windows-x86_64"
+        } else {
+            "darwin-aarch64"
+        };
+        let mut updated = manifest.clone();
+        updated.platforms.get_mut(other).unwrap().runtime_version = "9.0.0".to_string();
+        assert!(runtime_status_from_manifest(&updated, &root, platform).runtime_installed);
+
+        fs::write(
+            runtime_version_path(&root),
+            serde_json::to_vec(&RuntimeVersionRecord {
+                version: version.to_string(),
+                platform: other.to_string(),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(!runtime_status_from_manifest(&manifest, &root, platform).runtime_installed);
+        assert!(!runtime_status_from_manifest(&manifest, &root, "linux-x86_64").runtime_installed);
+    }
 }
 
 #[test]

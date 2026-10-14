@@ -13,7 +13,7 @@ usage() {
 Usage:
   R2_ENDPOINT=... R2_BUCKET=... RELEASE_BASE_URL=... scripts/macos/release-cv-runtime.sh [--platform <platform>] <runtime-version>
 
-Updates [mash_cv].runtime in versions.toml, builds the mash-cv runtime zip,
+Updates [mash_cv.runtime].<platform> in versions.toml, builds the mash-cv runtime zip,
 uploads it to R2, updates src-tauri/resources/runtime-manifest.json, commits
 the change, and tags HEAD as cv-runtime/<platform>/<runtime-version>.
 
@@ -156,21 +156,7 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
   fail "tag already exists: $TAG"
 fi
 
-node - "$VERSION" <<'NODE'
-const fs = require("fs");
-const version = process.argv[2];
-const path = "versions.toml";
-const original = fs.readFileSync(path, "utf8");
-const next = original.replace(
-  /(\[mash_cv\][\s\S]*?\nruntime\s*=\s*")[^"]+(")/,
-  `$1${version}$2`,
-);
-if (next === original) {
-  console.error("error: did not update [mash_cv].runtime in versions.toml");
-  process.exit(1);
-}
-fs.writeFileSync(path, next);
-NODE
+node scripts/shared/release-state.mjs version runtime "$VERSION" "$PLATFORM"
 
 (
   cd sidecar/mash_cv
@@ -201,29 +187,7 @@ echo "Upload completed in ${UPLOAD_SECONDS}s (${UPLOAD_SPEED})"
 echo "Validating public runtime URL"
 curl --fail --location --silent --show-error --head "$RUNTIME_URL" >/dev/null
 
-node - "$VERSION" "$PLATFORM" "$RUNTIME_URL" "$RUNTIME_SHA256" <<'NODE'
-const fs = require("fs");
-const [version, platform, runtimeUrl, runtimeSha256] = process.argv.slice(2);
-const path = "src-tauri/resources/runtime-manifest.json";
-const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
-manifest.mashCvRuntimeVersion = version;
-manifest.platforms ??= {};
-manifest.platforms[platform] ??= {};
-manifest.platforms[platform].runtimeUrl = runtimeUrl;
-manifest.platforms[platform].runtimeSha256 = runtimeSha256;
-fs.writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
-
-const reread = JSON.parse(fs.readFileSync(path, "utf8"));
-if (reread.mashCvRuntimeVersion !== version) {
-  throw new Error("runtime manifest version did not update");
-}
-if (reread.platforms?.[platform]?.runtimeUrl !== runtimeUrl) {
-  throw new Error("runtime manifest URL did not update");
-}
-if (reread.platforms?.[platform]?.runtimeSha256 !== runtimeSha256) {
-  throw new Error("runtime manifest sha did not update");
-}
-NODE
+node scripts/shared/release-state.mjs artifact runtime "$VERSION" "$PLATFORM" "$RUNTIME_URL" "$RUNTIME_SHA256"
 
 git add versions.toml src-tauri/resources/runtime-manifest.json
 git commit -m "Release mash-cv runtime $VERSION"

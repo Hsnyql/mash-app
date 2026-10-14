@@ -2,5 +2,9 @@
 version = "0.16.0"
 
 [mash_cv]
-runtime = "0.1.0"
 code = "0.4.26"
+
+[mash_cv.runtime]
+darwin-aarch64 = "2026.05.08-runtime1"
+darwin-x86_64 = "2026.05.08-runtime1"
+windows-x86_64 = "0.1.0"

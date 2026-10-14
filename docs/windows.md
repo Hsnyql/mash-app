@@ -145,8 +145,9 @@ updater 构建仍会运行 `build-windows.ps1` 的必要检查。
 ./scripts/windows/release-installer.ps1 -Unsigned
 ```
 
-runtime 发布可使用已选择的同版本号补充 Windows 平台，但不会覆盖已有
-runtime tag。完整新版本编排要求 CV 版本递增。
+Windows runtime 使用 `[mash_cv.runtime].windows-x86_64`（或对应架构）的独立版本，
+发布时只更新清单中的该平台条目，不影响 macOS。完整新版本编排要求
+runtime 版本相对目标平台递增；CV code 版本仍跨平台共用。
 另一平台先发布 App 后，检出同一个 `vX.Y.Z` tag 再运行
 `./scripts/windows/release.ps1 X.Y.Z -Installer -Publish`，即可补发 Windows；
 此模式不更改已有日志、版本或 CV 清单，所以该 tag 的清单必须已包含可下载

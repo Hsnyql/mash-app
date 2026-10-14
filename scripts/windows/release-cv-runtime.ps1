@@ -11,7 +11,7 @@ try {
     Assert-ReleaseEnvironment
     $tag = "cv-runtime/$Platform/$Version"
     Assert-NewTag $tag
-    $current = (Invoke-Native node @($releaseState, 'versions') | ConvertFrom-Json).runtime
+    $current = (Invoke-Native node @($releaseState, 'versions', $Platform) | ConvertFrom-Json).runtime
     if ($current -match '^\d+\.\d+\.\d+$' -and [version]$Version -lt [version]$current) { throw 'CV runtime version cannot go backwards.' }
     $env:MASH_CV_RUNTIME_VERSION = $Version
     & (Join-Path $PSScriptRoot 'build-cv.ps1') -Mode runtime -Python $Python
@@ -20,7 +20,7 @@ try {
     $sha = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
     $key = "$(Get-ReleasePrefix)/runtime/mash-cv/runtime/$Platform/$artifact"
     Publish-Artifact $file $key
-    Invoke-Native node @($releaseState, 'version', 'runtime', $Version)
+    Invoke-Native node @($releaseState, 'version', 'runtime', $Version, $Platform)
     Invoke-Native node @($releaseState, 'artifact', 'runtime', $Version, $Platform, "$($env:RELEASE_BASE_URL.TrimEnd('/'))/$key", $sha)
     Invoke-Native git @('add', '--', 'versions.toml', 'src-tauri/resources/runtime-manifest.json')
     Invoke-Native git @('commit', '-m', "chore(release): publish mash-cv runtime $Version ($Platform)")
