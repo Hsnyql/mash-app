@@ -9,16 +9,20 @@ use super::*;
 /// The game keeps this control anchored to the lower-left corner across
 /// landscape resolutions; the generous padding covers small layout shifts.
 const MYSTIC_CODE_ITEM_REGION: NormRect = NormRect {
-    x: 0.0,
-    y: 0.84,
-    w: 0.11,
-    h: 0.16,
+    x: 0.007,
+    y: 0.88,
+    w: 0.073,
+    h: 0.12,
 };
 const MYSTIC_CODE_ITEM_THRESHOLD: f64 = 0.62;
-const MYSTIC_CODE_ITEM_SCALES: &[f64] = &[
-    0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00, 1.05, 1.10, 1.15, 1.20, 1.25,
-    1.30, 1.35, 1.40,
-];
+
+/// One fixed icon size, normalized from the 84×84 icon at 1920×1080.
+pub(super) fn mystic_code_item_template_size(frame_w: u32, frame_h: u32) -> (u32, u32) {
+    (
+        ((84.0 * frame_w as f64 / 1920.0).round() as u32).max(1),
+        ((84.0 * frame_h as f64 / 1080.0).round() as u32).max(1),
+    )
+}
 
 impl Runner {
     pub(crate) fn handle_team_confirm(&mut self) {
@@ -118,19 +122,20 @@ impl Runner {
             return false;
         };
 
-        let result = self.sidecar().find_region_multiscale(
+        let template_size = mystic_code_item_template_size(self.frame_w, self.frame_h);
+        let result = self.sidecar().find_region_with_template_size(
             Some(image_path),
             &template_path,
             MYSTIC_CODE_ITEM_REGION,
             MYSTIC_CODE_ITEM_THRESHOLD,
-            MYSTIC_CODE_ITEM_SCALES,
+            template_size,
         );
         match result {
             Ok(match_result) if match_result.found => {
                 self.emit(
                     "TeamConfirm",
                     &format!(
-                        "御主礼装检测成功（ID {mystic_code_id}），多尺度最佳得分 {:.3}（阈值 {:.2}）",
+                        "御主礼装检测成功（ID {mystic_code_id}），匹配得分 {:.3}（阈值 {:.2}）",
                         match_result.score, MYSTIC_CODE_ITEM_THRESHOLD
                     ),
                 );
@@ -141,7 +146,7 @@ impl Runner {
                 self.emit_debug(
                     "TeamConfirm",
                     &format!(
-                        "御主礼装图标匹配未通过，多尺度最佳得分 {:.3}（阈值 {:.2}）",
+                        "御主礼装图标匹配未通过，匹配得分 {:.3}（阈值 {:.2}）",
                         match_result.score, MYSTIC_CODE_ITEM_THRESHOLD
                     ),
                 );

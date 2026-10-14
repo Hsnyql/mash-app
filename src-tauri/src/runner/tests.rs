@@ -2,6 +2,15 @@ use super::engine::support_search_screen_exited;
 use super::*;
 
 #[test]
+fn mystic_code_item_uses_one_size_relative_to_the_cv_frame() {
+    use super::prebattle::mystic_code_item_template_size;
+
+    assert_eq!(mystic_code_item_template_size(1920, 1080), (84, 84));
+    assert_eq!(mystic_code_item_template_size(2560, 1440), (112, 112));
+    assert_eq!(mystic_code_item_template_size(1280, 720), (56, 56));
+}
+
+#[test]
 fn battle_run_progress_serializes_all_recovery_counts() {
     let mut usage = BattleRunApRecoveryUsage::default();
     for item in [

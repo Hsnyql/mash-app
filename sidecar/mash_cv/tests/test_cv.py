@@ -5951,6 +5951,63 @@ class TestREPL:
         assert 0.19 <= responses[0]["region"]["x"] <= 0.21
         assert 0.39 <= responses[0]["region"]["y"] <= 0.41
 
+    @pytest.mark.parametrize("frame_size,icon_size", [
+        ((1920, 1080), 84),
+        ((2560, 1440), 112),
+        ((1280, 720), 56),
+    ])
+    def test_find_region_matches_fixed_size_outfit(self, tmp_path, frame_size, icon_size):
+        # The source asset is larger and transparent; matching must resize it
+        # and composite its background without searching multiple scales.
+        rng = np.random.default_rng(210)
+        template = np.zeros((128, 128, 4), dtype=np.uint8)
+        template[8:120, 8:120, :3] = rng.integers(
+            0, 256, (112, 112, 3), dtype=np.uint8
+        )
+        template[8:120, 8:120, 3] = 255
+        alpha = template[:, :, 3:4].astype(np.float32) / 255.0
+        icon = cv2.resize(
+            (template[:, :, :3] * alpha + 224 * (1.0 - alpha)).astype(np.uint8),
+            (icon_size, icon_size),
+            interpolation=cv2.INTER_AREA,
+        )
+        width, height = frame_size
+        image = _make_bgr_image(width, height, bgr=(224, 224, 224))
+        left, top = round(width * 0.02), round(height * 0.90)
+        image[top:top + icon_size, left:left + icon_size] = icon
+        image_path = str(tmp_path / "outfit-scene.png")
+        template_path = str(tmp_path / "outfit.png")
+        _save_image(image, image_path)
+        _save_image(template, template_path)
+        request = {
+            "cmd": "find_region",
+            "imagePath": image_path,
+            "templatePath": template_path,
+            "region": {"x": 0.007, "y": 0.88, "w": 0.073, "h": 0.12},
+            "templateSize": {"w": icon_size, "h": icon_size},
+            "threshold": 0.62,
+            "alphaMask": True,
+            "alphaBackground": 224,
+        }
+
+        # A miss must still return its score for the runner's diagnostic log.
+        responses = self._run([
+            request,
+            {**request, "threshold": 1.01},
+            {"cmd": "quit"},
+        ])
+
+        match, miss = responses
+        assert match["found"] is True
+        assert match["score"] > 0.99
+        assert "scale" not in match
+        assert match["region"]["x"] == pytest.approx(left / width)
+        assert match["region"]["y"] == pytest.approx(top / height)
+        assert match["region"]["w"] == pytest.approx(icon_size / width)
+        assert match["region"]["h"] == pytest.approx(icon_size / height)
+        assert miss["found"] is False
+        assert miss["score"] == pytest.approx(match["score"])
+
     def test_find_region_tries_explicit_scales(self, tmp_path):
         patch = _gradient_patch(20)
         template = np.zeros((24, 24, 4), dtype=np.uint8)
