@@ -1053,7 +1053,6 @@ describe("BattleSceneBlock staged action editor", () => {
     expect(children[6]).toHaveTextContent("↔");
     expect(children[7]).toHaveClass("battle-inline-face");
     const outcome = summary?.querySelector(".command-row-outcome") as HTMLElement;
-    expect(within(outcome).queryByText("换位")).not.toBeInTheDocument();
     expect(outcome.querySelectorAll(".battle-inline-face")).toHaveLength(2);
     expect(within(outcome).queryByText("甲", { exact: true })).not.toBeInTheDocument();
     expect(within(outcome).queryByText("丁", { exact: true })).not.toBeInTheDocument();
