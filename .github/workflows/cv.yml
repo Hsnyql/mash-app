@@ -46,6 +46,7 @@ jobs:
               - 'src-tauri/resources/scrcpy/**'
               - 'src-tauri/resources/runtime-manifest.json'
               - 'scripts/{macos,windows}/build-cv.{sh,ps1}'
+              - 'scripts/shared/cv-code-release.mjs'
               - 'scripts/windows/common.ps1'
               - '.github/workflows/cv.yml'
               - 'src-tauri/src/commands/**'
@@ -61,6 +62,7 @@ jobs:
               - 'src-tauri/resources/scrcpy/**'
               - 'src-tauri/resources/runtime-manifest.json'
               - 'scripts/{macos,windows}/build-cv.{sh,ps1}'
+              - 'scripts/shared/cv-code-release.mjs'
               - 'scripts/windows/common.ps1'
               - '.github/workflows/cv.yml'
               - '!sidecar/mash_cv/tests/**'
@@ -161,7 +163,7 @@ jobs:
       - name: Prepare Windows ADB resources
         run: ./scripts/windows/prepare-windows-adb.ps1
       - name: Install locally built CV ZIPs through the Rust backend
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib tests::locally_built_windows_bundles_install_and_report_ready -- --ignored --exact
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib tests::locally_built_platform_bundles_install_and_report_ready -- --ignored --exact
       - uses: actions/upload-artifact@v4
         with:
           name: mash-cv-windows-x64

@@ -201,6 +201,31 @@ Windows 使用 `scripts/windows/bump-cv-code-version.ps1 <version>` 和
 `scripts/windows/release-cv-code.ps1 <version>`。code ZIP 内容由共享 Python
 builder 生成，与平台无关；不要重复发布同版本但不同内容的 ZIP。
 
+### GitHub Actions code 发布
+
+正式发布使用 `.github/workflows/cv-code-release.yml` 的手动运行入口。workflow
+默认只构建候选包；勾选 `publish` 后，必须在默认分支上运行，并按以下顺序执行：
+
+发布 environment `cv-code-release` 需要配置 `R2_ACCESS_KEY_ID` 与
+`R2_SECRET_ACCESS_KEY` secrets，以及 `R2_ENDPOINT`、`R2_BUCKET` 和可选的
+`RELEASE_BASE_URL`、`R2_PREFIX` variables。为该 environment 配置人工审批，
+使候选测试和真正上传分开。
+
+1. 固定 `source_ref` 到 commit SHA，读取该 commit 中已发布的 Windows x64 与
+   macOS Apple Silicon runtime 版本、URL 和 SHA-256；
+2. 在 Linux 上构建一次 `mash-cv-code-v<version>.zip`，保存候选包和发布记录；
+3. 在 Windows 与 macOS runner 上分别下载清单中的原生 runtime，使用同一份 code
+   ZIP 做源码测试、冻结 runtime 兼容性测试和对应平台的 Rust 导入测试；
+4. 使用候选包原文件上传 R2，使用条件写入保护不可变对象，再从公开 CDN 完整下载
+   并验证 SHA-256；
+5. 创建或验证 `cv-code/<version>` tag，并生成更新 `versions.toml` 与
+   `runtime-manifest.json` 的 PR。
+
+Code 版本是所有平台共用的字段，因此 PR 会同步更新 manifest 中每个平台的
+`codeUrl` 与 `codeSha256`；runtime 字段和 runtime 文件不会被修改。发布失败后应
+重新运行同一个候选版本，脚本会复用同 SHA-256 的已上传对象，并拒绝覆盖不同内容。
+App 发布必须等这个 PR 合并后再创建新的 App tag。
+
 ## CV Runtime 发布
 
 CV runtime package 包含 PyInstaller onedir build、native dependency、model 及 runtime layout。它体积较大，应低频发布。仅在以下变更时升级 runtime 版本：

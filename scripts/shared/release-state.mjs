@@ -65,12 +65,20 @@ export function applyCvArtifact(kind, version, platform, url, sha256) {
   if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error("Invalid SHA-256");
   if (new URL(url).protocol !== "https:") throw new Error("Artifact URL must use HTTPS");
   const manifest = JSON.parse(read(manifestPath));
-  if (kind === "code") manifest.mashCvCodeVersion = version;
   manifest.platforms ??= {};
   manifest.platforms[platform] ??= {};
-  if (kind === "runtime") manifest.platforms[platform].runtimeVersion = version;
-  manifest.platforms[platform][`${kind}Url`] = url;
-  manifest.platforms[platform][`${kind}Sha256`] = sha256;
+  if (kind === "code") {
+    manifest.mashCvCodeVersion = version;
+    // One code version is shared by every runtime platform.
+    for (const artifact of Object.values(manifest.platforms)) {
+      artifact.codeUrl = url;
+      artifact.codeSha256 = sha256;
+    }
+  } else {
+    manifest.platforms[platform].runtimeVersion = version;
+    manifest.platforms[platform].runtimeUrl = url;
+    manifest.platforms[platform].runtimeSha256 = sha256;
+  }
   writeJson(manifestPath, manifest);
 }
 export function finalizeChangelog(version, date) {
