@@ -51,11 +51,14 @@ mash/
 version = "0.2.2"
 
 [mash_cv]
-runtime = "0.2.2"
 code = "0.2.2"
+
+[mash_cv.runtime]
+darwin-aarch64 = "0.2.2"
+windows-x86_64 = "0.1.0"
 ```
 
-所有发布版本均使用 `x.x.x` 格式。tag 约定：
+Runtime 按操作系统和 CPU 架构独立维护版本；发布某个平台只更新该平台的版本、URL 和 SHA-256。CV code 继续共用一个版本。现有 macOS runtime 保留历史版本号 `2026.05.08-runtime1`，后续新发布版本使用 `x.x.x` 格式。tag 约定：
 
 - App：`v0.2.2`
 - CV code：`cv-code/0.2.2`
@@ -215,7 +218,7 @@ R2_ENDPOINT=... R2_BUCKET=... RELEASE_BASE_URL=... scripts/macos/release-cv-runt
 
 脚本将：
 
-1. 更新 `versions.toml` 中的 `[mash_cv].runtime`；
+1. 更新 `versions.toml` 中的 `[mash_cv.runtime].<platform>`；
 2. 构建 `mash-cv-runtime-<platform>-v<version>.zip`；
 3. 将 artifact 上传至 R2；
 4. 计算 SHA-256；
@@ -258,10 +261,10 @@ mash/downloads/latest/Mash_x64-setup.exe
 
 ```json
 {
-  "mashCvRuntimeVersion": "0.2.2",
   "mashCvCodeVersion": "0.2.2",
   "platforms": {
     "darwin-aarch64": {
+      "runtimeVersion": "0.2.2",
       "runtimeUrl": "https://mash.xiaotongx.com/mash/runtime/mash-cv/runtime/darwin-aarch64/mash-cv-runtime-darwin-aarch64-v0.2.2.zip",
       "runtimeSha256": "...",
       "codeUrl": "https://mash.xiaotongx.com/mash/runtime/mash-cv/code/mash-cv-code-v0.2.2.zip",
@@ -274,11 +277,15 @@ mash/downloads/latest/Mash_x64-setup.exe
 本地安装路径：
 
 ```text
-app_data_dir()/runtime/mash-cv/runtime/<mashCvRuntimeVersion>/mash-cv-runtime/
+app_data_dir()/runtime/mash-cv/runtime/<platform.runtimeVersion>/mash-cv-runtime/
 app_data_dir()/runtime/mash-cv/code/<mashCvCodeVersion>/mash-cv-code/
 ```
 
 本机缺少 manifest 所要求的版本时，app 会提示用户安装 CV package。更新 app 不代表 CV package 已安装；是否需要安装仍由 manifest 与本地安装状态共同决定。
+
+从全局 runtime 版本迁移后，macOS 使用现有产物的历史版本号
+`2026.05.08-runtime1`。若旧安装记录被标为 `0.1.0`，应用会要求重新安装
+清单所指向的现有 runtime 包；下载地址和 SHA-256 没有变化。
 
 ## 上传说明
 

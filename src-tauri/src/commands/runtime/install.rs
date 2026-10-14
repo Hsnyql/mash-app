@@ -43,8 +43,8 @@ pub(crate) fn import_runtime_bundle_from_zip_path(
     let (kind_name, version, target, version_path) = match kind {
         RuntimeBundleKind::Runtime => (
             "runtime",
-            manifest.mash_cv_runtime_version.as_str(),
-            runtime_version_dir(runtime_root, &manifest.mash_cv_runtime_version),
+            artifact.runtime_version.as_str(),
+            runtime_version_dir(runtime_root, &artifact.runtime_version),
             runtime_version_path(runtime_root),
         ),
         RuntimeBundleKind::Code => (
@@ -90,7 +90,7 @@ pub(crate) fn import_runtime_bundle_from_zip_path(
     )
     .map_err(|e| format!("写入 runtime 版本记录失败: {e}"))?;
 
-    let exe = runtime_executable_path(runtime_root, &manifest.mash_cv_runtime_version);
+    let exe = runtime_executable_path(runtime_root, &artifact.runtime_version);
     let code_path = runtime_code_path(runtime_root, &manifest.mash_cv_code_version);
     Ok(RuntimeInstallResult {
         installed_kind: kind_name.to_string(),

@@ -2,6 +2,7 @@ import importlib.util
 import os
 from pathlib import Path
 import stat
+import sys
 import zipfile
 
 import pytest
@@ -10,6 +11,58 @@ import pytest
 spec = importlib.util.spec_from_file_location("build_sidecar", Path(__file__).parents[1] / "build_sidecar.py")
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
+
+
+@pytest.mark.parametrize("system,machine,version", [
+    ("Darwin", "arm64", "2026.05.08-runtime1"),
+    ("Windows", "AMD64", "0.1.0"),
+])
+def test_main_builds_the_host_runtime_version(tmp_path, monkeypatch, system, machine, version):
+    root = tmp_path / "sidecar" / "mash_cv"
+    root.mkdir(parents=True)
+    (tmp_path / "versions.toml").write_text(
+        '[mash_cv]\ncode = "0.4.26"\n[mash_cv.runtime]\n'
+        'darwin-aarch64 = "2026.05.08-runtime1"\nwindows-x86_64 = "0.1.0"\n', encoding="utf-8",
+    )
+    monkeypatch.setattr(builder, "ROOT", root)
+    monkeypatch.setattr(builder.platform, "system", lambda: system)
+    monkeypatch.setattr(builder.platform, "machine", lambda: machine)
+    monkeypatch.setattr(sys, "argv", ["build_sidecar.py", "--runtime-only"])
+    monkeypatch.delenv("MASH_CV_RUNTIME_VERSION", raising=False)
+    calls = []
+    monkeypatch.setattr(builder, "build_runtime", lambda v, target: (calls.append((v, target)) or (root / "runtime.zip", "sha")))
+    builder.main()
+    assert calls == [(version, builder.platform_key(system, machine))]
+
+
+def test_code_only_build_does_not_require_a_host_runtime_version(tmp_path, monkeypatch):
+    root = tmp_path / "sidecar" / "mash_cv"
+    root.mkdir(parents=True)
+    (tmp_path / "versions.toml").write_text('[mash_cv]\ncode = "0.4.26"\n[mash_cv.runtime]\n', encoding="utf-8")
+    monkeypatch.setattr(builder, "ROOT", root)
+    monkeypatch.setattr(sys, "argv", ["build_sidecar.py", "--code-only"])
+    monkeypatch.delenv("MASH_CV_CODE_VERSION", raising=False)
+    calls = []
+    monkeypatch.setattr(builder, "build_code", lambda v: (calls.append(v) or (root / "code.zip", "sha")))
+    builder.main()
+    assert calls == ["0.4.26"]
+    monkeypatch.setattr(sys, "argv", ["build_sidecar.py", "--runtime-only"])
+    monkeypatch.delenv("MASH_CV_RUNTIME_VERSION", raising=False)
+    with pytest.raises(SystemExit, match="2"):
+        builder.main()
+
+
+def test_runtime_version_override_supports_a_new_platform(tmp_path, monkeypatch):
+    root = tmp_path / "sidecar" / "mash_cv"
+    root.mkdir(parents=True)
+    (tmp_path / "versions.toml").write_text('[mash_cv]\ncode = "0.4.26"\n[mash_cv.runtime]\n', encoding="utf-8")
+    monkeypatch.setattr(builder, "ROOT", root)
+    monkeypatch.setattr(sys, "argv", ["build_sidecar.py", "--runtime-only"])
+    monkeypatch.setenv("MASH_CV_RUNTIME_VERSION", "0.2.0")
+    calls = []
+    monkeypatch.setattr(builder, "build_runtime", lambda v, target: (calls.append(v) or (root / "runtime.zip", "sha")))
+    builder.main()
+    assert calls == ["0.2.0"]
 
 
 @pytest.mark.parametrize("system,machine,expected", [

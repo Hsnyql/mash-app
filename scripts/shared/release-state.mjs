@@ -10,24 +10,42 @@ const git = (...args) => execFileSync("git", args, { encoding: "utf8", windowsHi
 export function validateVersion(version) {
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(`Version must look like x.y.z: ${version}`);
 }
-function replaceValue(text, section, key, value) {
-  const pattern = new RegExp(`(\\[${section}\\][\\s\\S]*?\\n${key}\\s*=\\s*")[^"]+(")`);
-  if (!pattern.test(text)) throw new Error(`Missing ${section}.${key}`);
-  return text.replace(pattern, (_, prefix, suffix) => `${prefix}${value}${suffix}`);
+const escapeRegex = text => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const sectionPattern = section => new RegExp(`(\\[${escapeRegex(section)}\\][ \\t]*\\r?\\n)([\\s\\S]*?)(?=\\r?\\n\\[|$)`);
+function replaceValue(text, section, key, value, allowNew = false) {
+  const pattern = sectionPattern(section);
+  const entry = new RegExp(`(^${escapeRegex(key)}\\s*=\\s*")[^"]+(")`, "m");
+  const match = text.match(pattern);
+  if (!match || (!entry.test(match[2]) && !allowNew)) throw new Error(`Missing ${section}.${key}`);
+  return text.replace(pattern, (_, header, body) => header + (entry.test(body)
+    ? body.replace(entry, (_, prefix, suffix) => `${prefix}${value}${suffix}`)
+    : `${body.trimEnd()}\n${key} = "${value}"\n`));
 }
-export function readVersions() {
+function validatePlatform(platform) {
+  if (!/^(windows|darwin)-(x86_64|aarch64)$/.test(platform)) throw new Error("Invalid platform");
+}
+export function readVersions(platform) {
+  if (platform) validatePlatform(platform);
   const source = read("versions.toml");
   const value = (section, key) => {
-    const match = source.match(new RegExp(`\\[${section}\\][\\s\\S]*?\\n${key}\\s*=\\s*"([^"]+)"`));
+    const body = source.match(sectionPattern(section))?.[2];
+    const match = body?.match(new RegExp(`^${escapeRegex(key)}\\s*=\\s*"([^"]+)"`, "m"));
     if (!match) throw new Error(`Missing ${section}.${key}`);
     return match[1];
   };
-  return { app: value("app", "version"), code: value("mash_cv", "code"), runtime: value("mash_cv", "runtime") };
+  const runtimeBody = source.match(sectionPattern("mash_cv.runtime"))?.[2];
+  if (runtimeBody === undefined) throw new Error("Missing mash_cv.runtime");
+  const runtimes = Object.fromEntries([...runtimeBody.matchAll(/^([\w-]+)\s*=\s*"([^"]+)"/gm)].map(match => [match[1], match[2]]));
+  return { app: value("app", "version"), code: value("mash_cv", "code"), runtimes,
+    ...(platform ? { runtime: runtimes[platform] ?? "" } : {}) };
 }
-export function updateVersion(kind, version) {
+export function updateVersion(kind, version, platform) {
   validateVersion(version);
   if (!["app", "code", "runtime"].includes(kind)) throw new Error(`Unknown version kind: ${kind}`);
-  const updates = new Map([["versions.toml", replaceValue(read("versions.toml"), kind === "app" ? "app" : "mash_cv", kind === "app" ? "version" : kind, version)]]);
+  if (kind === "runtime") validatePlatform(platform);
+  const section = kind === "app" ? "app" : kind === "runtime" ? "mash_cv.runtime" : "mash_cv";
+  const key = kind === "app" ? "version" : kind === "runtime" ? platform : kind;
+  const updates = new Map([["versions.toml", replaceValue(read("versions.toml"), section, key, version, kind === "runtime")]]);
   if (kind === "app") {
     const config = JSON.parse(read("src-tauri/tauri.conf.json"));
     config.version = version;
@@ -43,13 +61,14 @@ export function updateVersion(kind, version) {
 export function applyCvArtifact(kind, version, platform, url, sha256) {
   validateVersion(version);
   if (!["runtime", "code"].includes(kind)) throw new Error("Invalid CV artifact kind");
-  if (!/^(windows|darwin)-(x86_64|aarch64)$/.test(platform)) throw new Error("Invalid platform");
+  validatePlatform(platform);
   if (!/^[a-f0-9]{64}$/.test(sha256)) throw new Error("Invalid SHA-256");
   if (new URL(url).protocol !== "https:") throw new Error("Artifact URL must use HTTPS");
   const manifest = JSON.parse(read(manifestPath));
-  manifest[kind === "code" ? "mashCvCodeVersion" : "mashCvRuntimeVersion"] = version;
+  if (kind === "code") manifest.mashCvCodeVersion = version;
   manifest.platforms ??= {};
   manifest.platforms[platform] ??= {};
+  if (kind === "runtime") manifest.platforms[platform].runtimeVersion = version;
   manifest.platforms[platform][`${kind}Url`] = url;
   manifest.platforms[platform][`${kind}Sha256`] = sha256;
   writeJson(manifestPath, manifest);
@@ -72,7 +91,7 @@ export function releasePlan(app, code, runtime, platform, publish = false) {
   if (code) validateVersion(code);
   if (runtime) validateVersion(runtime);
   if (!/^windows-(x86_64|aarch64)$/.test(platform)) throw new Error("Unsupported Windows platform");
-  const current = readVersions();
+  const current = readVersions(platform);
   const latestTag = pattern => git("for-each-ref", "--count=1", "--sort=-version:refname", "--format=%(refname:strip=2)", `refs/tags/${pattern}`);
   const appTag = `v${app}`;
   if (compareVersions(app, current.app) < 0) throw new Error("App version cannot go backwards");
@@ -91,7 +110,8 @@ export function releasePlan(app, code, runtime, platform, publish = false) {
   const unreleased = /^## 未发布\r?$/m.test(changelog);
   if (!ready && !unreleased) throw new Error("Missing target release or unreleased changelog heading");
   const lastCode = latestTag("cv-code/*");
-  const base = git("log", "-1", "--format=%H", "-S", `runtime = "${current.runtime}"`, "--", "versions.toml") || latestTag("v*");
+  const runtimeTag = `cv-runtime/${platform}/${current.runtime}`;
+  const base = git("tag", "--list", runtimeTag) || git("log", "-1", "--format=%H", "-S", `${platform} = "${current.runtime}"`, "--", "versions.toml") || latestTag("v*");
   const codeChanged = hasChangesSince(lastCode, ["sidecar/mash_cv/mash_cv", "sidecar/mash_cv/tests", "src-tauri/resources/servers"]);
   const runtimeChanged = hasChangesSince(base, runtimePaths);
   // A second platform publishes the exact same tagged source without new CV releases.
@@ -105,7 +125,7 @@ export function releasePlan(app, code, runtime, platform, publish = false) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [command, ...args] = process.argv.slice(2);
   switch (command) {
-    case "versions": console.log(JSON.stringify(readVersions())); break;
+    case "versions": console.log(JSON.stringify(readVersions(args[0]))); break;
     case "version": updateVersion(...args); break;
     case "artifact": applyCvArtifact(...args); break;
     case "changelog": finalizeChangelog(...args); break;

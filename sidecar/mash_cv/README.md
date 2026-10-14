@@ -132,8 +132,11 @@ bash ../../scripts/macos/build-cv.sh
 ```
 
 The shared `build_sidecar.py` builder reads the default runtime/code versions from the repo-root
-`versions.toml`. Set `MASH_CV_RUNTIME_VERSION` or `MASH_CV_CODE_VERSION` only
-when you need a one-off override.
+`versions.toml`: `[mash_cv].code` is shared, while `[mash_cv.runtime]` maps
+platform keys to independent runtime versions. Runtime builds select the native
+host's key; code-only builds do not require a runtime entry. Set
+`MASH_CV_RUNTIME_VERSION` or `MASH_CV_CODE_VERSION` only when you need a one-off
+override.
 
 By default, the build script creates two artifacts:
 
@@ -177,7 +180,7 @@ app_data_dir()/runtime/mash-cv/code/<codeVersion>/mash-cv-code/
 After the script prints the artifact SHA-256 values, upload the changed zip to
 the release host/CDN and update `src-tauri/resources/runtime-manifest.json` with:
 
-- `mashCvRuntimeVersion`
+- the affected platform's `runtimeVersion`
 - `mashCvCodeVersion`
 - each platform's `runtimeUrl` / `runtimeSha256`
 - each platform's `codeUrl` / `codeSha256`
@@ -185,7 +188,9 @@ the release host/CDN and update `src-tauri/resources/runtime-manifest.json` with
 If only Python code changed, run `bash ../../scripts/macos/build-cv.sh --code-only`
 or `../../scripts/windows/build-cv.ps1 -Mode code`, bump only
 `mashCvCodeVersion`, and update only each platform's `codeUrl` / `codeSha256`.
-Keep the existing runtime version, URL, and SHA unchanged.
+Keep every platform's existing runtime version, URL, and SHA unchanged.
+Publishing a runtime updates only the target platform's entry in
+`versions.toml` and the manifest.
 
 The script no longer copies the sidecar into `src-tauri/binaries/`; `mash-cv`
 is distributed independently so normal Tauri app updates do not force users to

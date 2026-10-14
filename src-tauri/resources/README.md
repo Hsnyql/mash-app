@@ -66,10 +66,10 @@ app build and where users can download the matching zips. See
 
 ```json
 {
-  "mashCvRuntimeVersion": "0.2.2",
   "mashCvCodeVersion": "0.2.2",
   "platforms": {
     "darwin-aarch64": {
+      "runtimeVersion": "0.2.2",
       "runtimeUrl": "https://cdn.example.com/mash/runtime/mash-cv/runtime/darwin-aarch64/mash-cv-runtime-darwin-aarch64-v0.2.2.zip",
       "runtimeSha256": "...",
       "codeUrl": "https://cdn.example.com/mash/runtime/mash-cv/code/mash-cv-code-v0.2.2.zip",
@@ -79,10 +79,14 @@ app build and where users can download the matching zips. See
 }
 ```
 
+Each platform has its own `runtimeVersion`, URL, and SHA-256. Publishing one
+platform does not change another platform's required runtime. The Python code
+version remains shared across platforms.
+
 Artifacts are installed manually through the app into:
 
 ```text
-app_data_dir()/runtime/mash-cv/runtime/<mashCvRuntimeVersion>/mash-cv-runtime/
+app_data_dir()/runtime/mash-cv/runtime/<platform.runtimeVersion>/mash-cv-runtime/
 app_data_dir()/runtime/mash-cv/code/<mashCvCodeVersion>/mash-cv-code/
 ```
 
@@ -93,7 +97,7 @@ Windows. The code zip must use `mash-cv-code/` as its archive root and contain
 before installing it through a staging directory, then writes separate
 `runtime-version.json` and `code-version.json` files.
 
-Only change `mashCvRuntimeVersion` when the heavy base changes: OCR models,
+Only change the affected platform's `runtimeVersion` when the heavy base changes: OCR models,
 PyInstaller dependencies, native dependencies, or runtime launcher/archive
 layout. Python-only sidecar source changes should only bump
 `mashCvCodeVersion`. UI/Rust-only fixes should leave both runtime versions

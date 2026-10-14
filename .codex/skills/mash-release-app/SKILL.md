@@ -103,6 +103,9 @@ consistently:
   choosing a version. The selected version must be strictly greater than the
   current one, must not reuse an existing tag, and must be used consistently in
   `versions.toml`, manifests, package metadata, and Git tags.
+  For runtime, compare only with the target platform's configured version and
+  use `cv-runtime/<platform>/<current-runtime-version>` as the change baseline;
+  another platform's release must not reset that baseline.
 - Validate each selected value before running a release script (for example,
   with `node` and a strict `^\\d+\\.\\d+\\.\\d+$` check). If a script still
   expects a historical date-style version, update the script/data contract or
@@ -141,7 +144,7 @@ Only when runtime changed:
 mise exec -- scripts/macos/release-cv-runtime.sh --platform darwin-aarch64 <runtime-version>
 ```
 
-This script updates `[mash_cv].runtime`, builds the runtime zip, uploads it, validates the URL, updates `runtime-manifest.json`, commits, and tags `cv-runtime/<platform>/<runtime-version>`.
+This script updates only `[mash_cv.runtime].<platform>` and that platform's `runtimeVersion`/URL/SHA in `runtime-manifest.json`, builds the runtime zip, uploads it, validates the URL, commits, and tags `cv-runtime/<platform>/<runtime-version>`. Runtime versions are independent per platform; CV code remains shared.
 
 After it finishes, verify:
 
@@ -149,7 +152,7 @@ After it finishes, verify:
 git show --stat --oneline HEAD
 git tag --points-at HEAD
 cat versions.toml
-node -e 'const fs=require("fs"); const m=JSON.parse(fs.readFileSync("src-tauri/resources/runtime-manifest.json","utf8")); console.log(m.mashCvRuntimeVersion, m.platforms["darwin-aarch64"].runtimeUrl, m.platforms["darwin-aarch64"].runtimeSha256)'
+node -e 'const fs=require("fs"); const m=JSON.parse(fs.readFileSync("src-tauri/resources/runtime-manifest.json","utf8")); console.log(m.platforms["darwin-aarch64"].runtimeVersion, m.platforms["darwin-aarch64"].runtimeUrl, m.platforms["darwin-aarch64"].runtimeSha256)'
 ```
 
 ## Publish CV Code

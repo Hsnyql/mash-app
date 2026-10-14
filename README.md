@@ -167,7 +167,7 @@ publishing are documented in [docs/windows.md](docs/windows.md).
 pnpm tauri build
 ```
 
-The Tauri bundle intentionally excludes `mash-cv`; app updates remain small. Bump `mashCvCodeVersion` for Python-only sidecar changes. Bump `mashCvRuntimeVersion` only when OCR models, PyInstaller dependencies, native dependencies, or the runtime launcher/archive layout changes. See [docs/distribution.md](docs/distribution.md) for the release flow.
+The Tauri bundle intentionally excludes `mash-cv`; app updates remain small. Bump the shared `mashCvCodeVersion` for Python-only sidecar changes. Each platform has an independent `runtimeVersion`; bump only the affected platform when OCR models, PyInstaller dependencies, native dependencies, or the runtime launcher/archive layout changes. See [docs/distribution.md](docs/distribution.md) for the release flow.
 
 ## How It Works
 

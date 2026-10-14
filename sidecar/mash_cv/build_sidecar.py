@@ -96,12 +96,19 @@ def main() -> None:
     mode.add_argument("--code-only", action="store_true")
     args = parser.parse_args()
     versions = tomllib.loads((ROOT.parents[1] / "versions.toml").read_text(encoding="utf-8"))["mash_cv"]
-    runtime_version = os.environ.get("MASH_CV_RUNTIME_VERSION", versions["runtime"])
+    target = platform_key(platform.system(), platform.machine())
+    runtime_version = os.environ.get("MASH_CV_RUNTIME_VERSION") or versions["runtime"].get(target)
     code_version = os.environ.get("MASH_CV_CODE_VERSION", versions["code"])
-    for version in (runtime_version, code_version):
+    if not args.code_only and runtime_version is None:
+        parser.error(f"No runtime version configured for {target}")
+    required_versions = []
+    if not args.code_only:
+        required_versions.append(runtime_version)
+    if not args.runtime_only:
+        required_versions.append(code_version)
+    for version in required_versions:
         if not version or any(char not in "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-_" for char in version):
             parser.error(f"Invalid artifact version: {version!r}")
-    target = platform_key(platform.system(), platform.machine())
     (ROOT / "dist").mkdir(exist_ok=True)
     print(f"Platform: {target}", flush=True)
     if not args.code_only:

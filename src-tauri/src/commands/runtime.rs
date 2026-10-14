@@ -29,7 +29,6 @@ pub(crate) fn ensure_download_not_cancelled(cancel: &AtomicBool) -> Result<(), S
 #[derive(serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RuntimeManifest {
-    pub(crate) mash_cv_runtime_version: String,
     pub(crate) mash_cv_code_version: String,
     pub(crate) platforms: HashMap<String, RuntimePlatformArtifact>,
 }
@@ -37,6 +36,7 @@ pub(crate) struct RuntimeManifest {
 #[derive(serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RuntimePlatformArtifact {
+    pub(crate) runtime_version: String,
     pub(crate) runtime_url: String,
     pub(crate) runtime_sha256: String,
     pub(crate) code_url: String,
@@ -191,20 +191,26 @@ pub(crate) fn runtime_status_from_manifest(
     runtime_root: &Path,
     platform: &str,
 ) -> RuntimeStatus {
-    let installed_runtime_version = read_runtime_version(runtime_root).map(|record| record.version);
+    let runtime_record = read_runtime_version(runtime_root);
+    let installed_runtime_version = runtime_record.as_ref().map(|record| record.version.clone());
     let installed_code_version = read_code_version(runtime_root).map(|record| record.version);
-    let executable = runtime_executable_path(runtime_root, &manifest.mash_cv_runtime_version);
-    let code_path = runtime_code_path(runtime_root, &manifest.mash_cv_code_version);
     let artifact = manifest.platforms.get(platform);
-    let runtime_installed = installed_runtime_version.as_deref()
-        == Some(manifest.mash_cv_runtime_version.as_str())
+    let runtime_version = artifact
+        .map(|item| item.runtime_version.as_str())
+        .unwrap_or("");
+    let executable = runtime_executable_path(runtime_root, runtime_version);
+    let code_path = runtime_code_path(runtime_root, &manifest.mash_cv_code_version);
+    let runtime_installed = artifact.is_some()
+        && runtime_record
+            .as_ref()
+            .is_some_and(|record| record.version == runtime_version && record.platform == platform)
         && executable.is_file();
     let code_installed = installed_code_version.as_deref()
         == Some(manifest.mash_cv_code_version.as_str())
         && code_path.join("mash_cv").is_dir();
 
     RuntimeStatus {
-        required_runtime_version: manifest.mash_cv_runtime_version.clone(),
+        required_runtime_version: runtime_version.to_string(),
         installed_runtime_version,
         runtime_installed,
         required_code_version: manifest.mash_cv_code_version.clone(),
@@ -214,7 +220,7 @@ pub(crate) fn runtime_status_from_manifest(
         platform: platform.to_string(),
         runtime_download_url: artifact.map(|item| item.runtime_url.clone()),
         runtime_expected_sha256: artifact.map(|item| item.runtime_sha256.clone()),
-        runtime_install_dir: runtime_version_dir(runtime_root, &manifest.mash_cv_runtime_version)
+        runtime_install_dir: runtime_version_dir(runtime_root, runtime_version)
             .to_string_lossy()
             .into_owned(),
         executable_path: executable.to_string_lossy().into_owned(),

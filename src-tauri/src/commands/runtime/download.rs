@@ -182,7 +182,7 @@ pub(crate) fn download_and_install_runtime_bundles_inner(
     if force || !status.runtime_installed {
         let filename = format!(
             "mash-cv-runtime-{platform}-v{}.zip",
-            manifest.mash_cv_runtime_version
+            artifact.runtime_version
         );
         let zip_path = downloads_dir.join(filename);
         installed.push(download.download_and_install(
