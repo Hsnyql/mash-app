@@ -1,4 +1,5 @@
 use crate::adb::Adb;
+use crate::automation_error::{AutomationResult, AutomationResultExt};
 use crate::enhancement_runner::parse_selected_count;
 use crate::runner::LogLevel;
 use crate::screen::{CraftEssenceGridCell, NormRect, Point, SidecarClient};
@@ -479,6 +480,12 @@ impl CraftEssenceEnhancementRunner {
     }
 
     pub fn run(mut self) {
+        if let Err(message) = self.run_loop() {
+            self.fail("CV", message.to_string());
+        }
+    }
+
+    fn run_loop(&mut self) -> AutomationResult<()> {
         self.transition(LifecycleEvent::WorkerStarted);
         self.emit(
             "",
@@ -493,12 +500,12 @@ impl CraftEssenceEnhancementRunner {
             if self.cancel.load(Ordering::Relaxed) {
                 self.transition(LifecycleEvent::StopRequested);
                 self.emit("", "概念礼装强化自动化已停止");
-                return;
+                return Ok(());
             }
-            let screen = self.detect_screen();
+            let screen = self.detect_screen()?;
             if self.awaiting_enhancement_return {
-                if !self.handle_enhancement_return(screen) {
-                    return;
+                if !self.handle_enhancement_return(screen)? {
+                    return Ok(());
                 }
                 continue;
             }
@@ -515,7 +522,7 @@ impl CraftEssenceEnhancementRunner {
                         "Unknown",
                         "连续多次无法识别当前页面，请确认当前处于概念礼装强化流程".into(),
                     );
-                    return;
+                    return Ok(());
                 }
                 thread::sleep(Duration::from_millis(700));
                 continue;
@@ -527,8 +534,8 @@ impl CraftEssenceEnhancementRunner {
                     target_selected: true,
                     ready,
                 } => {
-                    if !self.handle_strategy_main(ready) {
-                        return;
+                    if !self.handle_strategy_main(ready)? {
+                        return Ok(());
                     }
                 }
                 Screen::Main {
@@ -547,43 +554,43 @@ impl CraftEssenceEnhancementRunner {
                         "CraftEssenceEnhancement",
                         "element_enhancement_new",
                         TARGET_SELECT_BUTTON,
-                    ) {
+                    )? {
                         thread::sleep(Duration::from_millis(900));
                     }
                 }
                 Screen::CraftEssenceSelect { descending } => {
-                    if !self.handle_craft_essence_select(descending) {
-                        return;
+                    if !self.handle_craft_essence_select(descending)? {
+                        return Ok(());
                     }
                 }
                 Screen::CraftEssenceLockMode => {
-                    if !self.handle_craft_essence_lock_mode() {
-                        return;
+                    if !self.handle_craft_essence_lock_mode()? {
+                        return Ok(());
                     }
                 }
                 Screen::FilterDialog => {
-                    if !self.handle_filter_dialog() {
-                        return;
+                    if !self.handle_filter_dialog()? {
+                        return Ok(());
                     }
                 }
                 Screen::OrderDialog => {
-                    if !self.handle_order_dialog() {
-                        return;
+                    if !self.handle_order_dialog()? {
+                        return Ok(());
                     }
                 }
                 Screen::RecommendMaterialDialog => {
-                    if !self.handle_recommend_material_dialog() {
-                        return;
+                    if !self.handle_recommend_material_dialog()? {
+                        return Ok(());
                     }
                 }
                 Screen::RecommendMaterialEmptyDialog => {
                     if !self.handle_recommend_material_empty_dialog() {
-                        return;
+                        return Ok(());
                     }
                 }
                 Screen::EnhancedMaterialWarningDialog => {
                     if !self.handle_enhanced_material_warning_dialog() {
-                        return;
+                        return Ok(());
                     }
                 }
                 Screen::EnhancementConfirmDialog => {
@@ -597,7 +604,7 @@ impl CraftEssenceEnhancementRunner {
                                 "EnhancementConfirmDialog",
                                 "强化已结算后确认框信号持续存在，页面未能稳定".into(),
                             );
-                            return;
+                            return Ok(());
                         }
                         self.emit(
                             "EnhancementConfirmDialog",
@@ -607,7 +614,7 @@ impl CraftEssenceEnhancementRunner {
                         continue;
                     }
                     if !self.handle_enhancement_confirm_dialog() {
-                        return;
+                        return Ok(());
                     }
                 }
                 Screen::ExpOverflowDialog => {
@@ -616,7 +623,7 @@ impl CraftEssenceEnhancementRunner {
                         "检测到大成功或极大成功导致经验值溢出，关闭未使用素材提示",
                     );
                     if !self.tap_at("EnhancementAnimation", EXP_OVERFLOW_CLOSE_BUTTON) {
-                        return;
+                        return Ok(());
                     }
                     thread::sleep(Duration::from_millis(700));
                 }
@@ -631,14 +638,14 @@ impl CraftEssenceEnhancementRunner {
                                 "EnhancementAnimation",
                                 "强化已结算后成功画面信号持续存在，页面未能稳定".into(),
                             );
-                            return;
+                            return Ok(());
                         }
                         self.emit(
                             "EnhancementAnimation",
                             "忽略已结算强化的残留成功画面信号，只点击顶部返回且不重复结算",
                         );
                         if !self.tap_at("EnhancementAnimation", ENHANCEMENT_SKIP_BUTTON) {
-                            return;
+                            return Ok(());
                         }
                         thread::sleep(Duration::from_millis(500));
                         continue;
@@ -647,13 +654,13 @@ impl CraftEssenceEnhancementRunner {
                     self.enhancement_left_main = true;
                     self.enhancement_return_waits = 0;
                     self.enhancement_main_return_checks = 0;
-                    if !self.handle_enhancement_return(screen) {
-                        return;
+                    if !self.handle_enhancement_return(screen)? {
+                        return Ok(());
                     }
                 }
                 Screen::MaterialSelect => {
-                    if !self.handle_strategy_material_select() {
-                        return;
+                    if !self.handle_strategy_material_select()? {
+                        return Ok(());
                     }
                 }
                 Screen::Unknown => unreachable!(),
@@ -665,17 +672,8 @@ impl CraftEssenceEnhancementRunner {
 
 impl Drop for CraftEssenceEnhancementRunner {
     fn drop(&mut self) {
-        let Some(mut sidecar) = self.sidecar.take() else {
-            return;
-        };
-        if let Err(err) = sidecar.prepare_for_cache() {
-            eprintln!("[mash-cv] prepare CE enhancement sidecar for cache failed: {err}");
-        }
-        if let Some(cache) = &self.sidecar_cache {
-            let mut guard = cache.lock().unwrap();
-            if guard.is_none() {
-                *guard = Some(sidecar);
-            }
+        if let Some(sidecar) = self.sidecar.take() {
+            sidecar.return_to_cache(self.sidecar_cache.as_deref());
         }
     }
 }

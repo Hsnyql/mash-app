@@ -82,6 +82,9 @@ pub(crate) fn ensure_debug_sidecar(
     server: Server,
 ) -> Result<(), String> {
     let mut guard = debug_state.0.lock().unwrap();
+    if guard.as_ref().is_some_and(|client| !client.is_healthy()) {
+        *guard = None;
+    }
     if guard.is_none() {
         let tdirs = resolve_template_dirs(app, server);
         let cfgs = resolve_cv_config_paths(app, server);

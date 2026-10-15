@@ -3,7 +3,7 @@
 use super::*;
 
 impl CraftEssenceEnhancementRunner {
-    pub(super) fn handle_strategy_material_select(&mut self) -> bool {
+    pub(super) fn handle_strategy_material_select(&mut self) -> AutomationResult<bool> {
         if !matches!(
             self.strategy_stage,
             StrategyStage::BombBaseSelected
@@ -17,27 +17,27 @@ impl CraftEssenceEnhancementRunner {
                     "页面信号与当前策略冲突，等待下一帧复核且不点击卡片",
                 );
                 thread::sleep(Duration::from_millis(500));
-                return true;
+                return Ok(true);
             }
             self.fail(
                 "MaterialSelect",
                 format!("当前策略阶段不应进入素材列表: {:?}", self.strategy_stage),
             );
-            return false;
+            return Ok(false);
         }
         self.unexpected_material_checks = 0;
 
         if !self.density_checked {
-            if !self.ensure_max_density() {
-                return false;
+            if !self.ensure_max_density()? {
+                return Ok(false);
             }
             self.density_checked = true;
         }
-        let displayed_selected_count = match self.read_material_selected_count() {
+        let displayed_selected_count = match self.read_material_selected_count().recoverable()? {
             Ok(count) => count,
             Err(message) => {
-                self.fail("MaterialSelect", message);
-                return false;
+                self.fail("MaterialSelect", message.to_string());
+                return Ok(false);
             }
         };
         if same_copy_counter_update_pending(
@@ -56,7 +56,7 @@ impl CraftEssenceEnhancementRunner {
                     ),
                 );
                 thread::sleep(Duration::from_millis(500));
-                return true;
+                return Ok(true);
             }
             self.fail(
                 "MaterialSelect",
@@ -65,18 +65,18 @@ impl CraftEssenceEnhancementRunner {
                     self.material_selected_count
                 ),
             );
-            return false;
+            return Ok(false);
         }
         self.material_pending_counter_waits = 0;
         let possible_level_max = material_accepts_level_max(self.strategy_stage)
             && self.material_selected_count > displayed_selected_count
             && displayed_selected_count > 0;
         let level_max_reached = if possible_level_max {
-            match self.read_material_level_max_reached() {
+            match self.read_material_level_max_reached().recoverable()? {
                 Ok(reached) => reached,
                 Err(message) => {
-                    self.fail("MaterialSelect", message);
-                    return false;
+                    self.fail("MaterialSelect", message.to_string());
+                    return Ok(false);
                 }
             }
         } else {
@@ -107,11 +107,11 @@ impl CraftEssenceEnhancementRunner {
                     "MaterialSelect",
                     "button_enhancement_ce_clean_all_select_ready",
                     MATERIAL_CLEAR_ALL_BUTTON,
-                ) {
-                    return false;
+                )? {
+                    return Ok(false);
                 }
                 thread::sleep(Duration::from_millis(700));
-                return true;
+                return Ok(true);
             }
             MaterialCounterDecision::AcceptLevelMax => {
                 self.material_selected_count = displayed_selected_count;
@@ -122,7 +122,7 @@ impl CraftEssenceEnhancementRunner {
                         "MaterialSelect",
                         "目标虽已达到等级上限，但没有选到同名 1 星礼装，拒绝制作经验包".into(),
                     );
-                    return false;
+                    return Ok(false);
                 }
                 self.emit(
                     "MaterialSelect",
@@ -135,12 +135,12 @@ impl CraftEssenceEnhancementRunner {
                     "MaterialSelect",
                     "button_enhancement_ce_select_exp_decide",
                     MATERIAL_DECIDE_BUTTON,
-                ) {
-                    return false;
+                )? {
+                    return Ok(false);
                 }
                 self.materials_committed = true;
                 thread::sleep(Duration::from_millis(850));
-                return true;
+                return Ok(true);
             }
             MaterialCounterDecision::Mismatch => {
                 self.fail(
@@ -150,7 +150,7 @@ impl CraftEssenceEnhancementRunner {
                         self.material_selected_count
                     ),
                 );
-                return false;
+                return Ok(false);
             }
         }
         let desired_two_star = false;
@@ -164,43 +164,47 @@ impl CraftEssenceEnhancementRunner {
                 "打开素材筛选，只显示 1 星以选择唯一同名副本",
             );
             if !self.tap_at("MaterialSelect", FILTER_BUTTON) {
-                return false;
+                return Ok(false);
             }
             thread::sleep(Duration::from_millis(800));
-            return true;
+            return Ok(true);
         }
         if !self.order_configured {
             self.emit("MaterialSelect", "打开素材排序设置");
             if !self.tap_at("MaterialSelect", ORDER_BUTTON) {
-                return false;
+                return Ok(false);
             }
             thread::sleep(Duration::from_millis(800));
-            return true;
+            return Ok(true);
         }
         let desired_descending = material_selection_descending(self.strategy_stage);
-        let descending = self.probe("button_enhancement_ce_select_ce_desc");
+        let descending = self.probe("button_enhancement_ce_select_ce_desc")?;
         if descending != desired_descending {
             self.emit("MaterialSelect", "切换为等级升序，从顶部开始选择强化素材");
             if !self.tap_at("MaterialSelect", ORDER_DIRECTION_BUTTON) {
-                return false;
+                return Ok(false);
             }
             self.material_scroll_reset_needed = true;
             self.material_scroll_reset_attempts = 0;
             thread::sleep(Duration::from_millis(650));
-            return true;
+            return Ok(true);
         }
 
-        let grid = match self.sidecar().read_craft_essence_grid(
-            None,
-            "enhancement_ce/item_ce_bar_bronze",
-            1920.0,
-            ITEM_GRID_REGION,
-            1.2,
-        ) {
+        let grid = match self
+            .sidecar()
+            .read_craft_essence_grid(
+                None,
+                "enhancement_ce/item_ce_bar_bronze",
+                1920.0,
+                ITEM_GRID_REGION,
+                1.2,
+            )
+            .recoverable()?
+        {
             Ok(grid) => grid,
             Err(err) => {
                 self.fail("MaterialSelect", format!("读取礼装素材列表失败: {err}"));
-                return false;
+                return Ok(false);
             }
         };
         if self.material_scroll_reset_needed {
@@ -226,14 +230,14 @@ impl CraftEssenceEnhancementRunner {
                         Point::new(LIST_SCROLLBAR_X, LIST_SCROLLBAR_OVERSHOOT_Y),
                         520,
                     ) {
-                        return false;
+                        return Ok(false);
                     }
                     thread::sleep(Duration::from_millis(700));
-                    return true;
+                    return Ok(true);
                 }
                 Err(message) => {
                     self.fail("MaterialSelect", format!("{message}，拒绝继续选择素材"));
-                    return false;
+                    return Ok(false);
                 }
             }
         }
@@ -249,7 +253,7 @@ impl CraftEssenceEnhancementRunner {
                     ),
                 );
                 thread::sleep(Duration::from_millis(450));
-                return true;
+                return Ok(true);
             }
             self.fail(
                 "MaterialSelect",
@@ -258,7 +262,7 @@ impl CraftEssenceEnhancementRunner {
                     grid.diagnostics.invalid_cell_count
                 ),
             );
-            return false;
+            return Ok(false);
         }
         self.material_grid_read_failures = 0;
 
@@ -282,7 +286,7 @@ impl CraftEssenceEnhancementRunner {
                     "QpEfficientComplete",
                     "已识别到 8 个锁定的 50 级丸子，节省 QP 策略完成；程序不会解锁任何礼装",
                 );
-                return false;
+                return Ok(false);
             }
             if self.completed_bombs > 0 {
                 self.emit(
@@ -365,7 +369,7 @@ impl CraftEssenceEnhancementRunner {
                 cell.region.y + cell.region.h / 2.0,
             );
             if !self.tap_at("MaterialSelect", point) {
-                return false;
+                return Ok(false);
             }
             if self.strategy_stage == StrategyStage::PacketSelected
                 && !self.material_same_copy_selected
@@ -382,7 +386,7 @@ impl CraftEssenceEnhancementRunner {
                             "MaterialSelect",
                             "经验包批次记录与待选素材不一致，已停止".into(),
                         );
-                        return false;
+                        return Ok(false);
                     };
                     self.packet_feed_remaining.remove(index);
                 }
@@ -396,7 +400,7 @@ impl CraftEssenceEnhancementRunner {
                 "MaterialSelect",
                 "已点击同名 1 星副本，等待下一帧页面计数确认",
             );
-            return true;
+            return Ok(true);
         }
 
         if material_selection_ready_to_commit(
@@ -404,13 +408,14 @@ impl CraftEssenceEnhancementRunner {
             required,
             self.material_same_copy_pending,
         ) {
-            let displayed_selected_count = match self.read_material_selected_count() {
-                Ok(count) => count,
-                Err(message) => {
-                    self.fail("MaterialSelect", message);
-                    return false;
-                }
-            };
+            let displayed_selected_count =
+                match self.read_material_selected_count().recoverable()? {
+                    Ok(count) => count,
+                    Err(message) => {
+                        self.fail("MaterialSelect", message.to_string());
+                        return Ok(false);
+                    }
+                };
             if displayed_selected_count != required {
                 self.fail(
                     "MaterialSelect",
@@ -418,7 +423,7 @@ impl CraftEssenceEnhancementRunner {
                         "点击决定前页面显示已选 {displayed_selected_count}/20，预期 {required}/20，拒绝继续"
                     ),
                 );
-                return false;
+                return Ok(false);
             }
             if self.strategy_stage == StrategyStage::PacketSelected
                 && !self.material_same_copy_selected
@@ -427,7 +432,7 @@ impl CraftEssenceEnhancementRunner {
                     "MaterialSelect",
                     "没有选到同名 1 星礼装，拒绝制作经验包".into(),
                 );
-                return false;
+                return Ok(false);
             }
             self.emit(
                 "MaterialSelect",
@@ -437,30 +442,31 @@ impl CraftEssenceEnhancementRunner {
                 "MaterialSelect",
                 "button_enhancement_ce_select_exp_decide",
                 MATERIAL_DECIDE_BUTTON,
-            ) {
-                return false;
+            )? {
+                return Ok(false);
             }
             self.materials_committed = true;
             thread::sleep(Duration::from_millis(850));
-            return true;
+            return Ok(true);
         }
         if material_tapped {
-            return true;
+            return Ok(true);
         }
 
-        let material_at_bottom = self.probe("element_enhancement_ce_scroll_end");
+        let material_at_bottom = self.probe("element_enhancement_ce_scroll_end")?;
         if inventory_feed_ready_at_bottom(
             self.feed_inventory_packets,
             self.material_selected_count,
             material_at_bottom,
         ) {
-            let displayed_selected_count = match self.read_material_selected_count() {
-                Ok(count) => count,
-                Err(message) => {
-                    self.fail("MaterialSelect", message);
-                    return false;
-                }
-            };
+            let displayed_selected_count =
+                match self.read_material_selected_count().recoverable()? {
+                    Ok(count) => count,
+                    Err(message) => {
+                        self.fail("MaterialSelect", message.to_string());
+                        return Ok(false);
+                    }
+                };
             if displayed_selected_count != self.material_selected_count {
                 self.fail(
                     "MaterialSelect",
@@ -469,7 +475,7 @@ impl CraftEssenceEnhancementRunner {
                         self.material_selected_count
                     ),
                 );
-                return false;
+                return Ok(false);
             }
             self.emit(
                 "MaterialSelect",
@@ -481,12 +487,12 @@ impl CraftEssenceEnhancementRunner {
                 "MaterialSelect",
                 "button_enhancement_ce_select_exp_decide",
                 MATERIAL_DECIDE_BUTTON,
-            ) {
-                return false;
+            )? {
+                return Ok(false);
             }
             self.materials_committed = true;
             thread::sleep(Duration::from_millis(850));
-            return true;
+            return Ok(true);
         }
         self.material_scrolls = next_page_scan_count(
             self.material_scrolls,
@@ -506,7 +512,7 @@ impl CraftEssenceEnhancementRunner {
                     "MaterialSelect",
                     "没有可用的未锁定、已升级 1 星礼装；一星和二星素材均已消耗完",
                 );
-                return false;
+                return Ok(false);
             }
             self.fail(
                 "MaterialSelect",
@@ -536,7 +542,7 @@ impl CraftEssenceEnhancementRunner {
                     _ => unreachable!(),
                 },
             );
-            return false;
+            return Ok(false);
         }
         self.emit(
             "MaterialSelect",
@@ -546,9 +552,9 @@ impl CraftEssenceEnhancementRunner {
             ),
         );
         if !self.swipe_at("MaterialSelect", LIST_SWIPE_FROM, LIST_SWIPE_TO, 520) {
-            return false;
+            return Ok(false);
         }
         thread::sleep(Duration::from_millis(700));
-        true
+        Ok(true)
     }
 }

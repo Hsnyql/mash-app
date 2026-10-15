@@ -2,6 +2,10 @@
 
 友情点抽取由独立的 `src-tauri/src/friend_point_summon_runner.rs` 驱动，Tauri lifecycle command 位于 `src-tauri/src/commands/automation/friend_point.rs`，当前仅支持国服。它与战斗、从者强化和概念礼装强化 runner 互斥，只共享 ADB、视频流、触控和 CV sidecar 基础设施。
 
+实际使用的模板加载失败时，任务进入 `Error` 并显示模板名或路径，停止后续识别和点击；失败的 sidecar 不再缓存。完整的模板文件和配置引用检查由“自检”执行，任务启动不额外遍历所有目标。
+
+Python 在统一模板读取入口抛出 `TemplateLoadError`，请求边界返回结构化错误。Rust CV 层将其转换为 `CvError::TemplateLoad`，自动化业务层以 `AutomationError::Cv` 包装并通过 `Result` 和 `?` 逐层返回（文件读写错误则保留为 `AutomationError::Io`），最外层 `run()` 将任务设为失败并汇报。原有重试和坐标兜底仅处理普通识别错误，模板加载错误会直接退出；客户端统一负责清理和缓存健康检查。
+
 ## 页面和安全约束
 
 - 用户先手动进入目标友情池，点击启动即指定本次目标。启动时检测召唤外壳且排除确认框、继续结果页，记录候选画面；后续连续两帧匹配候选特征后点击“召唤 × 100”。不再依赖静态友情点主页文字模板，也不把候选画面视为友情池认证。错误卡池仍须由独立确认框校验拦截。

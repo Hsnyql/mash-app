@@ -3,8 +3,8 @@
 use super::*;
 
 impl CraftEssenceEnhancementRunner {
-    pub(super) fn handle_strategy_main(&mut self, template_ready: bool) -> bool {
-        match self.strategy_stage {
+    pub(super) fn handle_strategy_main(&mut self, template_ready: bool) -> AutomationResult<bool> {
+        Ok(match self.strategy_stage {
             StrategyStage::BombSelected => {
                 self.strategy_stage = StrategyStage::SelectPacketBase;
                 self.open_target_select("准备制作 1 破 1 星经验包")
@@ -20,9 +20,11 @@ impl CraftEssenceEnhancementRunner {
             | StrategyStage::SelectBombBase
             | StrategyStage::SelectPacketBase => self.open_target_select("重新识别目标概念礼装"),
             StrategyStage::PacketAutoFeedPending => {
-                self.handle_packet_auto_feed_main(template_ready)
+                self.handle_packet_auto_feed_main(template_ready)?
             }
-            StrategyStage::FastAutoFeedPending => self.handle_fast_auto_feed_main(template_ready),
+            StrategyStage::FastAutoFeedPending => {
+                self.handle_fast_auto_feed_main(template_ready)?
+            }
             StrategyStage::BombBaseSelected
             | StrategyStage::PacketSelected
             | StrategyStage::BombSelectedForFeed => {
@@ -48,40 +50,43 @@ impl CraftEssenceEnhancementRunner {
                         },
                     );
                     if !self.tap_at("CraftEssenceEnhancement", MATERIAL_SELECT_BUTTON) {
-                        return false;
+                        return Ok(false);
                     }
                     thread::sleep(Duration::from_millis(850));
-                    return true;
+                    return Ok(true);
                 }
 
                 let ready = if template_ready {
                     true
                 } else {
-                    let button_match = match self.sidecar().find_element_by_name(
-                        None,
-                        SCREEN_NAME,
-                        "button_enhancement_ready",
-                    ) {
+                    let button_match = match self
+                        .sidecar()
+                        .find_element_by_name(None, SCREEN_NAME, "button_enhancement_ready")
+                        .recoverable()?
+                    {
                         Ok(result) => result,
                         Err(err) => {
                             self.fail(
                                 "CraftEssenceEnhancement",
                                 format!("识别强化按钮失败: {err}"),
                             );
-                            return false;
+                            return Ok(false);
                         }
                     };
-                    let mean_luma =
-                        match self.sidecar().read_region_luma(None, ENHANCE_BUTTON_REGION) {
-                            Ok(value) => value,
-                            Err(err) => {
-                                self.fail(
-                                    "CraftEssenceEnhancement",
-                                    format!("读取强化按钮亮度失败: {err}"),
-                                );
-                                return false;
-                            }
-                        };
+                    let mean_luma = match self
+                        .sidecar()
+                        .read_region_luma(None, ENHANCE_BUTTON_REGION)
+                        .recoverable()?
+                    {
+                        Ok(value) => value,
+                        Err(err) => {
+                            self.fail(
+                                "CraftEssenceEnhancement",
+                                format!("读取强化按钮亮度失败: {err}"),
+                            );
+                            return Ok(false);
+                        }
+                    };
                     matches!(
                         classify_enhancement_button(button_match.score, mean_luma),
                         EnhancementReadyState::Ready
@@ -95,10 +100,10 @@ impl CraftEssenceEnhancementRunner {
                             "CraftEssenceEnhancement",
                             "素材已决定，但强化按钮连续多次未就绪".into(),
                         );
-                        return false;
+                        return Ok(false);
                     }
                     thread::sleep(Duration::from_millis(600));
-                    return true;
+                    return Ok(true);
                 }
 
                 self.recommend_ready_waits = 0;
@@ -118,14 +123,14 @@ impl CraftEssenceEnhancementRunner {
                         "CraftEssenceEnhancement",
                         "多次点击强化按钮后，确认对话框仍未打开".into(),
                     );
-                    return false;
+                    return Ok(false);
                 }
                 if !self.tap_probe_or_point(
                     "CraftEssenceEnhancement",
                     "button_enhancement_ready",
                     ENHANCE_BUTTON,
-                ) {
-                    return false;
+                )? {
+                    return Ok(false);
                 }
                 self.enhance_open_attempts = self.enhance_open_attempts.saturating_add(1);
                 thread::sleep(Duration::from_millis(800));
@@ -135,22 +140,28 @@ impl CraftEssenceEnhancementRunner {
             | StrategyStage::VerifyBombBaseLock
             | StrategyStage::ExitBombBaseLockMode
             | StrategyStage::QpEfficientComplete => false,
-        }
+        })
     }
 
-    pub(super) fn handle_packet_auto_feed_main(&mut self, template_ready: bool) -> bool {
-        self.handle_auto_feed_main(template_ready, AutoFeedStrategy::QpEfficientPacket)
+    pub(super) fn handle_packet_auto_feed_main(
+        &mut self,
+        template_ready: bool,
+    ) -> AutomationResult<bool> {
+        Ok(self.handle_auto_feed_main(template_ready, AutoFeedStrategy::QpEfficientPacket)?)
     }
 
-    pub(super) fn handle_fast_auto_feed_main(&mut self, template_ready: bool) -> bool {
-        self.handle_auto_feed_main(template_ready, AutoFeedStrategy::FastBomb)
+    pub(super) fn handle_fast_auto_feed_main(
+        &mut self,
+        template_ready: bool,
+    ) -> AutomationResult<bool> {
+        Ok(self.handle_auto_feed_main(template_ready, AutoFeedStrategy::FastBomb)?)
     }
 
     pub(super) fn handle_auto_feed_main(
         &mut self,
         template_ready: bool,
         strategy: AutoFeedStrategy,
-    ) -> bool {
+    ) -> AutomationResult<bool> {
         if recommendation_needs_execution(
             self.recommend_executed_for_target,
             self.recommend_configured_profile,
@@ -161,7 +172,7 @@ impl CraftEssenceEnhancementRunner {
                     "CraftEssenceEnhancement",
                     "多次点击推荐选择后，对话框仍未打开".into(),
                 );
-                return false;
+                return Ok(false);
             }
             self.recommend_reset_done =
                 self.recommend_configured_profile == Some(self.recommend_profile);
@@ -171,38 +182,42 @@ impl CraftEssenceEnhancementRunner {
                 &format!("打开推荐选择，设置为{}", self.recommend_profile.label()),
             );
             if !self.tap_at("CraftEssenceEnhancement", RECOMMEND_MATERIAL_BUTTON) {
-                return false;
+                return Ok(false);
             }
             self.recommend_open_attempts = self.recommend_open_attempts.saturating_add(1);
             thread::sleep(Duration::from_millis(800));
-            return true;
+            return Ok(true);
         }
 
         let ready = if template_ready {
             true
         } else {
-            let button_match = match self.sidecar().find_element_by_name(
-                None,
-                SCREEN_NAME,
-                "button_enhancement_ready",
-            ) {
+            let button_match = match self
+                .sidecar()
+                .find_element_by_name(None, SCREEN_NAME, "button_enhancement_ready")
+                .recoverable()?
+            {
                 Ok(result) => result,
                 Err(err) => {
                     self.fail(
                         "CraftEssenceEnhancement",
                         format!("识别自动配置后的强化按钮失败: {err}"),
                     );
-                    return false;
+                    return Ok(false);
                 }
             };
-            let mean_luma = match self.sidecar().read_region_luma(None, ENHANCE_BUTTON_REGION) {
+            let mean_luma = match self
+                .sidecar()
+                .read_region_luma(None, ENHANCE_BUTTON_REGION)
+                .recoverable()?
+            {
                 Ok(value) => value,
                 Err(err) => {
                     self.fail(
                         "CraftEssenceEnhancement",
                         format!("读取自动配置后的强化按钮亮度失败: {err}"),
                     );
-                    return false;
+                    return Ok(false);
                 }
             };
             matches!(
@@ -223,7 +238,7 @@ impl CraftEssenceEnhancementRunner {
                     ),
                 );
                 thread::sleep(Duration::from_millis(650));
-                return true;
+                return Ok(true);
             }
             self.recommend_ready_waits = 0;
             if strategy == AutoFeedStrategy::QpEfficientPacket
@@ -236,7 +251,7 @@ impl CraftEssenceEnhancementRunner {
                     "CraftEssenceEnhancement",
                     "仅二星推荐配置没有可用素材，切换为仅一星",
                 );
-                return true;
+                return Ok(true);
             }
             self.transition(LifecycleEvent::Finished);
             self.emit(
@@ -247,7 +262,7 @@ impl CraftEssenceEnhancementRunner {
                     "一星和二星推荐素材均已耗尽，丸子制作结束"
                 },
             );
-            return false;
+            return Ok(false);
         }
 
         self.recommend_ready_waits = 0;
@@ -265,18 +280,18 @@ impl CraftEssenceEnhancementRunner {
                 "CraftEssenceEnhancement",
                 "多次点击自动配置强化按钮后，确认对话框仍未打开".into(),
             );
-            return false;
+            return Ok(false);
         }
         if !self.tap_probe_or_point(
             "CraftEssenceEnhancement",
             "button_enhancement_ready",
             ENHANCE_BUTTON,
-        ) {
-            return false;
+        )? {
+            return Ok(false);
         }
         self.enhance_open_attempts = self.enhance_open_attempts.saturating_add(1);
         thread::sleep(Duration::from_millis(800));
-        true
+        Ok(true)
     }
 
     pub(super) fn open_target_select(&mut self, message: &str) -> bool {
@@ -316,22 +331,22 @@ impl CraftEssenceEnhancementRunner {
         };
     }
 
-    pub(super) fn handle_craft_essence_lock_mode(&mut self) -> bool {
-        match self.strategy_stage {
+    pub(super) fn handle_craft_essence_lock_mode(&mut self) -> AutomationResult<bool> {
+        Ok(match self.strategy_stage {
             StrategyStage::LockBombBaseActive => {
                 let Some(point) = self.lock_candidate_point else {
                     self.fail(
                         "CraftEssenceLockMode",
                         "缺少刚确认未锁定的满破底卡坐标，拒绝执行锁定".into(),
                     );
-                    return false;
+                    return Ok(false);
                 };
                 self.emit(
                     "CraftEssenceLockMode",
                     "只锁定刚制作且进入模式前已确认未锁定的 1 星满破底卡",
                 );
                 if !self.tap_at("CraftEssenceLockMode", point) {
-                    return false;
+                    return Ok(false);
                 }
                 self.strategy_stage = StrategyStage::VerifyBombBaseLock;
                 self.target_return_waits = 0;
@@ -339,20 +354,24 @@ impl CraftEssenceEnhancementRunner {
                 true
             }
             StrategyStage::VerifyBombBaseLock => {
-                let grid = match self.sidecar().read_craft_essence_grid(
-                    None,
-                    "enhancement_ce/item_ce_bar_bronze",
-                    1920.0,
-                    ITEM_GRID_REGION,
-                    1.2,
-                ) {
+                let grid = match self
+                    .sidecar()
+                    .read_craft_essence_grid(
+                        None,
+                        "enhancement_ce/item_ce_bar_bronze",
+                        1920.0,
+                        ITEM_GRID_REGION,
+                        1.2,
+                    )
+                    .recoverable()?
+                {
                     Ok(grid) => grid,
                     Err(err) => {
                         self.fail(
                             "CraftEssenceLockMode",
                             format!("锁定后读取礼装网格失败: {err}"),
                         );
-                        return false;
+                        return Ok(false);
                     }
                 };
                 if !grid.found || grid.cells.iter().any(|cell| !cell.valid) {
@@ -360,7 +379,7 @@ impl CraftEssenceEnhancementRunner {
                         "CraftEssenceLockMode",
                         "锁定后存在无法安全识别的礼装，已停止且不会再次点击卡片".into(),
                     );
-                    return false;
+                    return Ok(false);
                 }
                 let candidate = grid.cells.iter().find(|cell| {
                     Some(cell.row) == self.lock_candidate_row
@@ -378,12 +397,12 @@ impl CraftEssenceEnhancementRunner {
                         "已确认新满破底卡出现锁图标，切回选择对象模式",
                     );
                     if !self.tap_at("CraftEssenceLockMode", SELECT_OBJECT_BUTTON) {
-                        return false;
+                        return Ok(false);
                     }
                     self.strategy_stage = StrategyStage::ExitBombBaseLockMode;
                     self.target_return_waits = 0;
                     thread::sleep(Duration::from_millis(700));
-                    return true;
+                    return Ok(true);
                 }
                 self.target_return_waits = self.target_return_waits.saturating_add(1);
                 if self.target_return_waits >= 5 {
@@ -391,7 +410,7 @@ impl CraftEssenceEnhancementRunner {
                         "CraftEssenceLockMode",
                         "未确认新满破底卡出现锁图标；为避免反向解锁，不会再次点击".into(),
                     );
-                    return false;
+                    return Ok(false);
                 }
                 thread::sleep(Duration::from_millis(450));
                 true
@@ -404,6 +423,6 @@ impl CraftEssenceEnhancementRunner {
                 );
                 false
             }
-        }
+        })
     }
 }

@@ -3,7 +3,10 @@
 use super::*;
 
 impl CraftEssenceEnhancementRunner {
-    pub(super) fn handle_craft_essence_select(&mut self, descending: bool) -> bool {
+    pub(super) fn handle_craft_essence_select(
+        &mut self,
+        descending: bool,
+    ) -> AutomationResult<bool> {
         if self.target_tapped {
             self.target_return_waits += 1;
             if self.target_return_waits >= 6 {
@@ -11,14 +14,14 @@ impl CraftEssenceEnhancementRunner {
                     "CraftEssenceSelect",
                     "点击第一张概念礼装后未返回强化页面".into(),
                 );
-                return false;
+                return Ok(false);
             }
             thread::sleep(Duration::from_millis(700));
-            return true;
+            return Ok(true);
         }
         if !self.density_checked {
-            if !self.ensure_max_density() {
-                return false;
+            if !self.ensure_max_density()? {
+                return Ok(false);
             }
             self.density_checked = true;
         }
@@ -30,17 +33,17 @@ impl CraftEssenceEnhancementRunner {
             self.emit("CraftEssenceSelect", "打开概念礼装筛选，只显示 1 星礼装");
             if self.tap_at("CraftEssenceSelect", FILTER_BUTTON) {
                 thread::sleep(Duration::from_millis(800));
-                return true;
+                return Ok(true);
             }
-            return false;
+            return Ok(false);
         }
         if !self.order_configured {
             self.emit("CraftEssenceSelect", "打开概念礼装排序设置");
             if self.tap_at("CraftEssenceSelect", ORDER_BUTTON) {
                 thread::sleep(Duration::from_millis(800));
-                return true;
+                return Ok(true);
             }
-            return false;
+            return Ok(false);
         }
         let desired_descending = target_selection_descending(self.strategy_stage);
         if descending != desired_descending {
@@ -56,23 +59,27 @@ impl CraftEssenceEnhancementRunner {
                 self.target_scroll_reset_needed = true;
                 self.target_scroll_reset_attempts = 0;
                 thread::sleep(Duration::from_millis(650));
-                return true;
+                return Ok(true);
             }
-            return false;
+            return Ok(false);
         }
         self.descending_checked = desired_descending;
         self.emit("CraftEssenceSelect", "读取礼装等级、上限、突破和锁定状态");
-        let grid = match self.sidecar().read_craft_essence_grid(
-            None,
-            "enhancement_ce/item_ce_bar_bronze",
-            1920.0,
-            ITEM_GRID_REGION,
-            1.2,
-        ) {
+        let grid = match self
+            .sidecar()
+            .read_craft_essence_grid(
+                None,
+                "enhancement_ce/item_ce_bar_bronze",
+                1920.0,
+                ITEM_GRID_REGION,
+                1.2,
+            )
+            .recoverable()?
+        {
             Ok(grid) => grid,
             Err(err) => {
                 self.fail("CraftEssenceSelect", format!("概念礼装网格识别失败: {err}"));
-                return false;
+                return Ok(false);
             }
         };
         if self.target_scroll_reset_needed {
@@ -98,14 +105,14 @@ impl CraftEssenceEnhancementRunner {
                         Point::new(LIST_SCROLLBAR_X, LIST_SCROLLBAR_OVERSHOOT_Y),
                         520,
                     ) {
-                        return false;
+                        return Ok(false);
                     }
                     thread::sleep(Duration::from_millis(700));
-                    return true;
+                    return Ok(true);
                 }
                 Err(message) => {
                     self.fail("CraftEssenceSelect", format!("{message}，拒绝继续选择礼装"));
-                    return false;
+                    return Ok(false);
                 }
             }
         }
@@ -121,7 +128,7 @@ impl CraftEssenceEnhancementRunner {
                     ),
                 );
                 thread::sleep(Duration::from_millis(450));
-                return true;
+                return Ok(true);
             }
             self.fail(
                 "CraftEssenceSelect",
@@ -130,7 +137,7 @@ impl CraftEssenceEnhancementRunner {
                     grid.diagnostics.invalid_cell_count
                 ),
             );
-            return false;
+            return Ok(false);
         }
         self.target_grid_read_failures = 0;
 
@@ -171,7 +178,7 @@ impl CraftEssenceEnhancementRunner {
                             "QpEfficientComplete",
                             "8 个丸子已完成，节省 QP 策略结束；程序不会解锁任何礼装",
                         );
-                        return false;
+                        return Ok(false);
                     }
                     self.current_bomb_fingerprint.clear();
                     self.current_bomb_level = 0;
@@ -180,7 +187,7 @@ impl CraftEssenceEnhancementRunner {
                     self.strategy_stage = StrategyStage::SelectPacketBase;
                 }
                 thread::sleep(Duration::from_millis(250));
-                return true;
+                return Ok(true);
             }
         }
 
@@ -218,7 +225,7 @@ impl CraftEssenceEnhancementRunner {
         };
 
         let Some(candidate) = candidate else {
-            let target_at_bottom = self.probe("element_enhancement_ce_scroll_end");
+            let target_at_bottom = self.probe("element_enhancement_ce_scroll_end")?;
             self.target_scrolls = next_page_scan_count(
                 self.target_scrolls,
                 TARGET_PAGE_MAX_SCROLLS,
@@ -237,7 +244,7 @@ impl CraftEssenceEnhancementRunner {
                     self.target_scrolls = 0;
                     self.target_scroll_reset_needed = true;
                     self.target_scroll_reset_attempts = 0;
-                    return true;
+                    return Ok(true);
                 }
                 if self.strategy_stage == StrategyStage::SelectPacketBase {
                     self.feed_inventory_packets = self.packet_fingerprints.is_empty();
@@ -256,16 +263,16 @@ impl CraftEssenceEnhancementRunner {
                     {
                         self.strategy_stage = StrategyStage::BombSelectedForFeed;
                         if !self.tap_at("CraftEssenceSelect", TARGET_LIST_CLOSE_BUTTON) {
-                            return false;
+                            return Ok(false);
                         }
                         thread::sleep(Duration::from_millis(850));
-                        return true;
+                        return Ok(true);
                     }
                     self.strategy_stage = StrategyStage::SelectBombForTransfer;
                     self.target_scrolls = 0;
                     self.target_scroll_reset_needed = true;
                     self.target_scroll_reset_attempts = 0;
-                    return true;
+                    return Ok(true);
                 }
                 self.fail(
                     "CraftEssenceSelect",
@@ -289,14 +296,14 @@ impl CraftEssenceEnhancementRunner {
                         _ => "当前策略阶段无法选择礼装".into(),
                     },
                 );
-                return false;
+                return Ok(false);
             }
             self.emit("CraftEssenceSelect", "当前页没有合适目标，继续向下查找");
             if !self.swipe_at("CraftEssenceSelect", LIST_SWIPE_FROM, LIST_SWIPE_TO, 520) {
-                return false;
+                return Ok(false);
             }
             thread::sleep(Duration::from_millis(700));
-            return true;
+            return Ok(true);
         };
 
         let point = Point::new(
@@ -341,10 +348,10 @@ impl CraftEssenceEnhancementRunner {
                     "已确认刚制作的满破底卡仍未锁定，进入统一锁定模式",
                 );
                 if !self.tap_at("CraftEssenceSelect", UNIFIED_LOCK_BUTTON) {
-                    return false;
+                    return Ok(false);
                 }
                 thread::sleep(Duration::from_millis(700));
-                return true;
+                return Ok(true);
             }
             StrategyStage::ExitBombBaseLockMode => {
                 self.current_bomb_level = candidate.level.unwrap_or(0);
@@ -376,8 +383,8 @@ impl CraftEssenceEnhancementRunner {
         if self.tap_at("CraftEssenceSelect", point) {
             self.target_tapped = true;
             thread::sleep(Duration::from_millis(900));
-            return true;
+            return Ok(true);
         }
-        false
+        Ok(false)
     }
 }

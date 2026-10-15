@@ -7,7 +7,7 @@ from typing import Any
 
 import cv2
 
-from .cv import _match_template_region
+from .cv import _match_template_region, _read_template_image, TemplateLoadError
 from .host.io import read_image
 
 
@@ -77,9 +77,10 @@ def main() -> None:
         print(json.dumps({"found": False, "error": "failed to read screenshot"}))
         sys.exit(2)
 
-    template = read_image(args.template, cv2.IMREAD_GRAYSCALE)
-    if template is None:
-        print(json.dumps({"found": False, "error": "failed to read template"}))
+    try:
+        template = _read_template_image(args.template, cv2.IMREAD_GRAYSCALE)
+    except TemplateLoadError as error:
+        print(json.dumps({"found": False, **error.response}))
         sys.exit(2)
 
     result = _match_template_region(

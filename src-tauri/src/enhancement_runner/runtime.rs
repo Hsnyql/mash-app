@@ -34,6 +34,12 @@ impl EnhancementRunner {
     }
 
     pub fn run(mut self) {
+        if let Err(message) = self.run_loop() {
+            self.fail("CV", message.to_string());
+        }
+    }
+
+    fn run_loop(&mut self) -> AutomationResult<()> {
         self.transition_lifecycle(EnhancementLifecycleEvent::WorkerStarted);
         self.emit(
             "",
@@ -51,14 +57,14 @@ impl EnhancementRunner {
             if self.is_cancelled() {
                 self.transition_lifecycle(EnhancementLifecycleEvent::StopRequested);
                 self.emit("", "强化自动化已停止");
-                return;
+                return Ok(());
             }
 
-            let (screen, ocr) = match self.detect_screen() {
+            let (screen, ocr) = match self.detect_screen().recoverable()? {
                 Ok(result) => result,
                 Err(err) => {
                     self.fail("", format!("画面识别失败: {err}"));
-                    return;
+                    return Ok(());
                 }
             };
 
@@ -69,11 +75,11 @@ impl EnhancementRunner {
             match screen {
                 EnhancementScreen::HomeMenuClosed => {
                     unknown_count = 0;
-                    self.handle_home_menu_closed();
+                    self.handle_home_menu_closed()?;
                 }
                 EnhancementScreen::HomeMenuOpen => {
                     unknown_count = 0;
-                    self.handle_home_menu_open();
+                    self.handle_home_menu_open()?;
                 }
                 EnhancementScreen::EnhanceMenu => {
                     unknown_count = 0;
@@ -81,23 +87,23 @@ impl EnhancementRunner {
                 }
                 EnhancementScreen::ServantEnhance => {
                     unknown_count = 0;
-                    self.handle_servant_enhance(&ocr);
+                    self.handle_servant_enhance(&ocr)?;
                 }
                 EnhancementScreen::ServantSelect => {
                     unknown_count = 0;
-                    self.handle_servant_select(&ocr);
+                    self.handle_servant_select(&ocr)?;
                 }
                 EnhancementScreen::FilterDialog => {
                     unknown_count = 0;
-                    self.handle_filter_dialog(&ocr);
+                    self.handle_filter_dialog(&ocr)?;
                 }
                 EnhancementScreen::MaterialSelect => {
                     unknown_count = 0;
-                    self.handle_material_select(&ocr);
+                    self.handle_material_select(&ocr)?;
                 }
                 EnhancementScreen::ConfirmDialog => {
                     unknown_count = 0;
-                    self.handle_confirm_dialog(&ocr);
+                    self.handle_confirm_dialog(&ocr)?;
                 }
                 EnhancementScreen::Ascension => {
                     unknown_count = 0;
@@ -109,7 +115,7 @@ impl EnhancementRunner {
                 }
                 EnhancementScreen::AscensionResult => {
                     unknown_count = 0;
-                    self.handle_ascension_result();
+                    self.handle_ascension_result()?;
                 }
                 EnhancementScreen::ProfileUpdateDialog => {
                     unknown_count = 0;
@@ -132,7 +138,7 @@ impl EnhancementRunner {
                                 summarize_ocr(&ocr)
                             ),
                         );
-                        return;
+                        return Ok(());
                     }
                     thread::sleep(Duration::from_millis(800));
                 }
@@ -224,10 +230,10 @@ impl EnhancementRunner {
         screen: &str,
         probe: TemplateProbe,
         fallback: Point,
-    ) -> bool {
-        let result = self.probe_template(probe);
+    ) -> AutomationResult<bool> {
+        let result = self.probe_template(probe)?;
         if let Some(center) = result.center {
-            return self.tap_at(screen, center);
+            return Ok(self.tap_at(screen, center));
         }
         self.emit(
             screen,
@@ -237,31 +243,34 @@ impl EnhancementRunner {
                 result.summary()
             ),
         );
-        self.tap_at(screen, fallback)
+        Ok(self.tap_at(screen, fallback))
     }
 
-    fn ocr_region(&mut self, region: NormRect) -> Result<OcrRegionResult, String> {
-        self.sidecar().ocr_region(None, region)
+    fn ocr_region(&mut self, region: NormRect) -> AutomationResult<OcrRegionResult> {
+        Ok(self.sidecar().ocr_region(None, region)?)
     }
 
-    fn probe_template(&mut self, probe: TemplateProbe) -> TemplateProbeResult {
-        match self
-            .sidecar()
-            .find_element_by_name(None, probe.screen, probe.element)
-        {
-            Ok(result) => TemplateProbeResult::from_match(probe, result),
-            Err(err) => TemplateProbeResult {
-                probe,
-                found: false,
-                score: 0.0,
-                center: None,
-                region: None,
-                error: Some(err),
+    fn probe_template(&mut self, probe: TemplateProbe) -> AutomationResult<TemplateProbeResult> {
+        Ok(
+            match self
+                .sidecar()
+                .find_element_by_name(None, probe.screen, probe.element)
+                .recoverable()?
+            {
+                Ok(result) => TemplateProbeResult::from_match(probe, result),
+                Err(err) => TemplateProbeResult {
+                    probe,
+                    found: false,
+                    score: 0.0,
+                    center: None,
+                    region: None,
+                    error: Some(err.to_string()),
+                },
             },
-        }
+        )
     }
 
-    fn detect_screen(&mut self) -> Result<(EnhancementScreen, OcrRegionResult), String> {
+    fn detect_screen(&mut self) -> AutomationResult<(EnhancementScreen, OcrRegionResult)> {
         let dialog = self.ocr_region(DIALOG_CLASSIFIER_REGION)?;
         let dialog_text = normalize_text(&dialog.full_text);
         if dialog_text.contains("プロフィール") && dialog_text.contains("閉じる") {
@@ -274,9 +283,9 @@ impl EnhancementRunner {
             return Ok((EnhancementScreen::ConfirmDialog, dialog));
         }
 
-        let template_results = self.collect_template_probe_results();
+        let template_results = self.collect_template_probe_results()?;
         if let Some(route) = detect_enhancement_screen(&template_results) {
-            return self.route_to_screen(route, &template_results);
+            return Ok(self.route_to_screen(route, &template_results)?);
         }
 
         let result = self.ocr_region(ASCENSION_RESULT_REGION)?;
@@ -292,7 +301,7 @@ impl EnhancementRunner {
         ))
     }
 
-    fn collect_template_probe_results(&mut self) -> Vec<TemplateProbeResult> {
+    fn collect_template_probe_results(&mut self) -> AutomationResult<Vec<TemplateProbeResult>> {
         UNKNOWN_DIAGNOSTIC_PROBES
             .into_iter()
             .map(|probe| self.probe_template(probe))
@@ -303,7 +312,7 @@ impl EnhancementRunner {
         &mut self,
         route: EnhancementRoute,
         probes: &[TemplateProbeResult],
-    ) -> Result<(EnhancementScreen, OcrRegionResult), String> {
+    ) -> AutomationResult<(EnhancementScreen, OcrRegionResult)> {
         let screen = match (route.screen, route.variant, route.status) {
             (EnhancementTopScreen::Main, EnhancementVariant::Main, EnhancementStatus::MenuOpen) => {
                 EnhancementScreen::HomeMenuOpen
@@ -359,7 +368,7 @@ impl EnhancementRunner {
     fn collect_unknown_region_summaries(
         &mut self,
         _template_results: &[TemplateProbeResult],
-    ) -> Result<Vec<NamedOcr>, String> {
+    ) -> AutomationResult<Vec<NamedOcr>> {
         Ok(vec![
             NamedOcr {
                 name: "dialog",
@@ -380,19 +389,26 @@ impl EnhancementRunner {
         ])
     }
 
-    fn handle_home_menu_closed(&mut self) {
+    fn handle_home_menu_closed(&mut self) -> AutomationResult<()> {
         self.emit("Home", "主页 MENU 未展开，点击 MENU");
-        if self.tap_template_or_point("Home", PROBE_BUTTON_MENU, HOME_MENU_BUTTON) {
-            thread::sleep(Duration::from_millis(700));
-        }
+        Ok(
+            if self.tap_template_or_point("Home", PROBE_BUTTON_MENU, HOME_MENU_BUTTON)? {
+                thread::sleep(Duration::from_millis(700));
+            },
+        )
     }
 
-    fn handle_home_menu_open(&mut self) {
+    fn handle_home_menu_open(&mut self) -> AutomationResult<()> {
         self.emit("HomeMenu", "进入强化菜单");
-        if self.tap_template_or_point("HomeMenu", PROBE_BUTTON_ENHANCEMENT, HOME_STRENGTHEN_BUTTON)
-        {
-            thread::sleep(Duration::from_millis(900));
-        }
+        Ok(
+            if self.tap_template_or_point(
+                "HomeMenu",
+                PROBE_BUTTON_ENHANCEMENT,
+                HOME_STRENGTHEN_BUTTON,
+            )? {
+                thread::sleep(Duration::from_millis(900));
+            },
+        )
     }
 
     fn handle_enhance_menu(&mut self) {
@@ -402,12 +418,16 @@ impl EnhancementRunner {
         }
     }
 
-    fn handle_servant_enhance(&mut self, ocr: &OcrRegionResult) {
-        let level = match self.sidecar().read_level_digits(None, LEVEL_DIGIT_REGION) {
+    fn handle_servant_enhance(&mut self, ocr: &OcrRegionResult) -> AutomationResult<()> {
+        let level = match self
+            .sidecar()
+            .read_level_digits(None, LEVEL_DIGIT_REGION)
+            .recoverable()?
+        {
             Ok(v) => v,
             Err(err) => {
                 self.fail("ServantEnhance", format!("模板读取等级失败: {err}"));
-                return;
+                return Ok(());
             }
         };
         if let (true, Some(current), Some(max)) = (level.found, level.current, level.max_level) {
@@ -432,7 +452,7 @@ impl EnhancementRunner {
                         thread::sleep(Duration::from_millis(900));
                     }
                 }
-                return;
+                return Ok(());
             }
 
             if contains_keyword(&ocr.fragments, "霊基再臨") {
@@ -444,7 +464,7 @@ impl EnhancementRunner {
                 if self.tap_at("ServantEnhance", ASCENSION_ENTRY_BUTTON) {
                     thread::sleep(Duration::from_millis(900));
                 }
-                return;
+                return Ok(());
             }
 
             self.transition_lifecycle(EnhancementLifecycleEvent::Finished);
@@ -452,7 +472,7 @@ impl EnhancementRunner {
                 "ServantEnhance",
                 &format!("强化完成，当前等级 {current}/{max}"),
             );
-            return;
+            return Ok(());
         }
 
         self.emit(
@@ -462,15 +482,15 @@ impl EnhancementRunner {
                 level.fail_reason.as_deref().unwrap_or("unknown")
             ),
         );
-        if self.tap_at("ServantEnhance", SERVANT_SELECT_BUTTON) {
+        Ok(if self.tap_at("ServantEnhance", SERVANT_SELECT_BUTTON) {
             thread::sleep(Duration::from_millis(900));
-        }
+        })
     }
 
-    fn handle_servant_select(&mut self, ocr: &OcrRegionResult) {
+    fn handle_servant_select(&mut self, ocr: &OcrRegionResult) -> AutomationResult<()> {
         if !self.servant_select_density_checked {
-            if !self.ensure_servant_select_max_density() {
-                return;
+            if !self.ensure_servant_select_max_density()? {
+                return Ok(());
             }
             self.servant_select_density_checked = true;
         }
@@ -480,15 +500,19 @@ impl EnhancementRunner {
             &format!("查找从者头像 {}", self.target.name_jp),
         );
         let face_template_paths = self.target.face_template_paths.clone();
-        match self.sidecar().find_enhancement_servant_grid(
-            None,
-            &face_template_paths,
-            SERVANT_LIST_REGION,
-            SERVANT_FACE_MATCH_CROP,
-            Some(SERVANT_FACE_TEMPLATE_SIZE),
-            0.85,
-            1.2,
-        ) {
+        match self
+            .sidecar()
+            .find_enhancement_servant_grid(
+                None,
+                &face_template_paths,
+                SERVANT_LIST_REGION,
+                SERVANT_FACE_MATCH_CROP,
+                Some(SERVANT_FACE_TEMPLATE_SIZE),
+                0.85,
+                1.2,
+            )
+            .recoverable()?
+        {
             Ok(result) => {
                 self.emit(
                     "ServantSelect",
@@ -503,12 +527,12 @@ impl EnhancementRunner {
                     if self.tap_at("ServantSelect", Point::new(result.x, result.y)) {
                         thread::sleep(Duration::from_millis(900));
                     }
-                    return;
+                    return Ok(());
                 }
             }
             Err(err) => {
                 self.fail("ServantSelect", format!("头像网格匹配失败: {err}"));
-                return;
+                return Ok(());
             }
         }
 
@@ -517,23 +541,25 @@ impl EnhancementRunner {
         let _ = self.tap_fragment_if_present("ServantSelect", &ocr.fragments, "降順");
         thread::sleep(Duration::from_millis(250));
 
-        if self.swipe_at(
-            "ServantSelect",
-            SERVANT_LIST_SCROLL_FROM,
-            SERVANT_LIST_SCROLL_TO,
-            450,
-        ) {
-            thread::sleep(Duration::from_millis(800));
-        }
+        Ok(
+            if self.swipe_at(
+                "ServantSelect",
+                SERVANT_LIST_SCROLL_FROM,
+                SERVANT_LIST_SCROLL_TO,
+                450,
+            ) {
+                thread::sleep(Duration::from_millis(800));
+            },
+        )
     }
 
-    fn ensure_servant_select_max_density(&mut self) -> bool {
-        self.ensure_scale_level_3("ServantSelect")
+    fn ensure_servant_select_max_density(&mut self) -> AutomationResult<bool> {
+        Ok(self.ensure_scale_level_3("ServantSelect")?)
     }
 
-    fn handle_filter_dialog(&mut self, ocr: &OcrRegionResult) {
+    fn handle_filter_dialog(&mut self, ocr: &OcrRegionResult) -> AutomationResult<()> {
         self.emit("FilterDialog", "设置仅经验值素材筛选");
-        let type_probe = self.probe_template(PROBE_TEXT_FILTER_SETTING_TYPE);
+        let type_probe = self.probe_template(PROBE_TEXT_FILTER_SETTING_TYPE)?;
         if !type_probe.found {
             self.fail(
                 "FilterDialog",
@@ -542,7 +568,7 @@ impl EnhancementRunner {
                     type_probe.summary()
                 ),
             );
-            return;
+            return Ok(());
         }
         for _ in 0..5 {
             if let Some(center) = find_exp_material_filter_center(&ocr.fragments) {
@@ -551,17 +577,17 @@ impl EnhancementRunner {
                 }
                 let _ = self.tap_at("FilterDialog", FILTER_CONFIRM_BUTTON);
                 thread::sleep(Duration::from_millis(900));
-                return;
+                return Ok(());
             }
             if !self.swipe_at("FilterDialog", FILTER_SCROLL_FROM, FILTER_SCROLL_TO, 500) {
-                return;
+                return Ok(());
             }
             thread::sleep(Duration::from_millis(700));
-            let refreshed = match self.ocr_region(FILTER_DIALOG_REGION) {
+            let refreshed = match self.ocr_region(FILTER_DIALOG_REGION).recoverable()? {
                 Ok(v) => v,
                 Err(err) => {
                     self.fail("FilterDialog", format!("刷新筛选 OCR 失败: {err}"));
-                    return;
+                    return Ok(());
                 }
             };
             if let Some(center) = find_exp_material_filter_center(&refreshed.fragments) {
@@ -570,7 +596,7 @@ impl EnhancementRunner {
                 }
                 let _ = self.tap_at("FilterDialog", FILTER_CONFIRM_BUTTON);
                 thread::sleep(Duration::from_millis(900));
-                return;
+                return Ok(());
             }
         }
 
@@ -578,31 +604,32 @@ impl EnhancementRunner {
             "FilterDialog",
             "未找到「サーヴァント(経験値)」筛选项，请确认素材筛选页面".to_string(),
         );
+        Ok(())
     }
 
-    fn handle_material_select(&mut self, ocr: &OcrRegionResult) {
+    fn handle_material_select(&mut self, ocr: &OcrRegionResult) -> AutomationResult<()> {
         if !self.exp_materials_look_safe(ocr) {
             self.emit("MaterialSelect", "当前素材页未确认是纯经验素材，打开筛选");
             if self.tap_at("MaterialSelect", FILTER_BUTTON) {
                 thread::sleep(Duration::from_millis(900));
             }
-            return;
+            return Ok(());
         }
 
         self.exp_materials_verified = true;
-        if !self.ensure_max_density() {
-            return;
+        if !self.ensure_max_density()? {
+            return Ok(());
         }
 
         self.emit("MaterialSelect", "尝试拖选 20 个经验素材");
         let _ = self.swipe_at("MaterialSelect", MATERIAL_DRAG_FROM, MATERIAL_DRAG_TO, 1100);
         thread::sleep(Duration::from_millis(1000));
 
-        let selected_after_drag = match self.read_selected_count() {
+        let selected_after_drag = match self.read_selected_count().recoverable()? {
             Ok(v) => v,
             Err(err) => {
                 self.fail("MaterialSelect", format!("读取已选数量失败: {err}"));
-                return;
+                return Ok(());
             }
         };
 
@@ -610,13 +637,13 @@ impl EnhancementRunner {
             self.emit("MaterialSelect", "拖选未凑满 20，改用逐个点击回退");
             for point in MATERIAL_GRID_POINTS {
                 if self.is_cancelled() {
-                    return;
+                    return Ok(());
                 }
                 if !self.tap_at("MaterialSelect", point) {
-                    return;
+                    return Ok(());
                 }
                 thread::sleep(Duration::from_millis(140));
-                if let Ok(count) = self.read_selected_count() {
+                if let Ok(count) = self.read_selected_count().recoverable()? {
                     if count >= 20 {
                         break;
                     }
@@ -624,11 +651,11 @@ impl EnhancementRunner {
             }
         }
 
-        let final_count = match self.read_selected_count() {
+        let final_count = match self.read_selected_count().recoverable()? {
             Ok(v) => v,
             Err(err) => {
                 self.fail("MaterialSelect", format!("读取最终已选数量失败: {err}"));
-                return;
+                return Ok(());
             }
         };
         if final_count < 20 {
@@ -636,51 +663,55 @@ impl EnhancementRunner {
                 "MaterialSelect",
                 format!("经验素材选择不足，当前仅选择了 {final_count}/20"),
             );
-            return;
+            return Ok(());
         }
 
         self.emit("MaterialSelect", "已选择 20 个经验素材，返回强化页");
-        if self.tap_at("MaterialSelect", MATERIAL_CONFIRM_BUTTON) {
+        Ok(if self.tap_at("MaterialSelect", MATERIAL_CONFIRM_BUTTON) {
             thread::sleep(Duration::from_millis(900));
-        }
+        })
     }
 
-    fn handle_confirm_dialog(&mut self, ocr: &OcrRegionResult) {
+    fn handle_confirm_dialog(&mut self, ocr: &OcrRegionResult) -> AutomationResult<()> {
         if normalize_text(&ocr.full_text).contains("★4以上") && !self.exp_materials_verified {
             self.fail(
                 "ConfirmDialog",
                 "出现高星素材警告，但当前未能确认素材仅为经验值".to_string(),
             );
-            return;
+            return Ok(());
         }
 
         self.emit("ConfirmDialog", "确认执行强化");
         if !self.tap_at("ConfirmDialog", DIALOG_CONFIRM_BUTTON) {
-            return;
+            return Ok(());
         }
         thread::sleep(Duration::from_millis(900));
 
-        match self.pending_confirm.take() {
+        Ok(match self.pending_confirm.take() {
             Some(PendingConfirm::Enhancement) => {
-                let _ = self.skip_until(
-                    "EnhancementAnimation",
-                    &[EnhancementScreen::ServantEnhance],
-                    Duration::from_secs(30),
-                );
+                let _ = self
+                    .skip_until(
+                        "EnhancementAnimation",
+                        &[EnhancementScreen::ServantEnhance],
+                        Duration::from_secs(30),
+                    )
+                    .recoverable()?;
             }
             Some(PendingConfirm::Ascension) => {
-                let _ = self.skip_until(
-                    "AscensionAnimation",
-                    &[
-                        EnhancementScreen::AscensionResult,
-                        EnhancementScreen::Ascension,
-                        EnhancementScreen::AscensionNotReady,
-                    ],
-                    Duration::from_secs(90),
-                );
+                let _ = self
+                    .skip_until(
+                        "AscensionAnimation",
+                        &[
+                            EnhancementScreen::AscensionResult,
+                            EnhancementScreen::Ascension,
+                            EnhancementScreen::AscensionNotReady,
+                        ],
+                        Duration::from_secs(90),
+                    )
+                    .recoverable()?;
             }
             None => {}
-        }
+        })
     }
 
     fn handle_ascension(&mut self) {
@@ -699,15 +730,17 @@ impl EnhancementRunner {
         );
     }
 
-    fn handle_ascension_result(&mut self) {
+    fn handle_ascension_result(&mut self) -> AutomationResult<()> {
         self.emit("AscensionResult", "灵基再临完成，返回从者强化页");
-        if self.tap_template_or_point(
-            "AscensionResult",
-            PROBE_BUTTON_ASCENSION_TO_SERVANT,
-            ASCENSION_RESULT_RETURN_BUTTON,
-        ) {
-            thread::sleep(Duration::from_millis(900));
-        }
+        Ok(
+            if self.tap_template_or_point(
+                "AscensionResult",
+                PROBE_BUTTON_ASCENSION_TO_SERVANT,
+                ASCENSION_RESULT_RETURN_BUTTON,
+            )? {
+                thread::sleep(Duration::from_millis(900));
+            },
+        )
     }
 
     fn handle_profile_update_dialog(&mut self, ocr: &OcrRegionResult) {
@@ -744,16 +777,16 @@ impl EnhancementRunner {
         exp_count >= 8 && !banned
     }
 
-    fn ensure_max_density(&mut self) -> bool {
-        self.ensure_scale_level_3("MaterialSelect")
+    fn ensure_max_density(&mut self) -> AutomationResult<bool> {
+        Ok(self.ensure_scale_level_3("MaterialSelect")?)
     }
 
-    fn ensure_scale_level_3(&mut self, screen: &str) -> bool {
+    fn ensure_scale_level_3(&mut self, screen: &str) -> AutomationResult<bool> {
         self.emit(screen, "确认一屏最多显示模式");
-        let mut last = self.probe_template(PROBE_BUTTON_SCALE_LEVEL_3);
+        let mut last = self.probe_template(PROBE_BUTTON_SCALE_LEVEL_3)?;
         for attempt in 0..=3 {
             match scale_level_3_decision(attempt, last.found) {
-                ScaleLevel3Decision::Done => return true,
+                ScaleLevel3Decision::Done => return Ok(true),
                 ScaleLevel3Decision::Fail => {
                     self.fail(
                         screen,
@@ -762,21 +795,21 @@ impl EnhancementRunner {
                             last.summary()
                         ),
                     );
-                    return false;
+                    return Ok(false);
                 }
                 ScaleLevel3Decision::TapAndRetry => {
                     if !self.tap_at(screen, GRID_DENSITY_BUTTON) {
-                        return false;
+                        return Ok(false);
                     }
                     thread::sleep(Duration::from_millis(500));
-                    last = self.probe_template(PROBE_BUTTON_SCALE_LEVEL_3);
+                    last = self.probe_template(PROBE_BUTTON_SCALE_LEVEL_3)?;
                 }
             }
         }
-        false
+        Ok(false)
     }
 
-    fn read_selected_count(&mut self) -> Result<u32, String> {
+    fn read_selected_count(&mut self) -> AutomationResult<u32> {
         let ocr = self.ocr_region(MATERIAL_COUNTER_REGION)?;
         Ok(parse_selected_count(&ocr.full_text).unwrap_or(0))
     }
@@ -786,7 +819,7 @@ impl EnhancementRunner {
         label: &str,
         targets: &[EnhancementScreen],
         timeout: Duration,
-    ) -> Result<(), String> {
+    ) -> AutomationResult<()> {
         let start = Instant::now();
         let mut last_tap = Instant::now() - Duration::from_secs(3);
         loop {
@@ -802,12 +835,12 @@ impl EnhancementRunner {
                 continue;
             }
             if start.elapsed() >= timeout {
-                return Err(format!("{label} 超时"));
+                return Err(format!("{label} 超时").into());
             }
             if last_tap.elapsed() >= Duration::from_millis(1200) {
                 self.emit(label, "点击屏幕跳过动画…");
                 if !self.tap_at(label, PAGE_CENTER_TAP) {
-                    return Err("点击跳过动画失败".to_string());
+                    return Err("点击跳过动画失败".into());
                 }
                 last_tap = Instant::now();
             }
@@ -818,18 +851,8 @@ impl EnhancementRunner {
 
 impl Drop for EnhancementRunner {
     fn drop(&mut self) {
-        let Some(mut sidecar) = self.sidecar.take() else {
-            return;
-        };
-        if let Err(err) = sidecar.prepare_for_cache() {
-            eprintln!("[mash-cv] prepare enhancement sidecar for cache failed: {err}");
-        }
-        if let Some(cache) = &self.sidecar_cache {
-            let mut guard = cache.lock().unwrap();
-            if guard.is_none() {
-                *guard = Some(sidecar);
-                return;
-            }
+        if let Some(sidecar) = self.sidecar.take() {
+            sidecar.return_to_cache(self.sidecar_cache.as_deref());
         }
     }
 }

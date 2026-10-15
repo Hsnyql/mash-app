@@ -189,7 +189,7 @@ pub fn debug_find_supports(
     let client = guard
         .as_mut()
         .ok_or_else(|| "debug sidecar not initialized".to_string())?;
-    let find_result: Result<FindSupportsResult, String> = client.find_supports(
+    let find_result: Result<FindSupportsResult, crate::screen::CvError> = client.find_supports(
         Some(&image_path),
         &meta.name,
         &meta.names,
@@ -287,7 +287,7 @@ pub fn debug_find_supports(
                             icon_checks: Vec::new(),
                             threshold: support_ce_threshold,
                             template_path: template_path_str.clone(),
-                            error: Some(e),
+                            error: Some(e.to_string()),
                         }
                     }
                 };
@@ -359,7 +359,7 @@ pub fn debug_find_supports(
                         icon_checks: Vec::new(),
                         threshold: support_ce_threshold,
                         template_path: template_path_str,
-                        error: Some(e),
+                        error: Some(e.to_string()),
                     },
                 }
             } else {

@@ -2,6 +2,14 @@
 
 本图描述 `src-tauri/src/runner/` 实现的战斗画面关系模型。画面身份来自 `SidecarClient::detect`，其配置来源为 `src-tauri/resources/servers/<server>/cv.json`。
 
+战斗画面识别仅探测本流程使用的画面（含职阶强化任务、AP 恢复和结算弹窗），不探测主菜单、从者强化等其他流程。运行中实际探测的模板缺失或无法读取时，任务进入 `Error`，保留模板名或路径，停止后续识别及触摸操作；损坏的 sidecar 不再放回缓存。正常的模板分数不足仍按未识别处理。启动时加载模板或配置失败也直接报错，不再仅记日志后继续运行。
+
+sidecar 使用统一的 `errorCode: template_load_failed` 标识模板加载错误，`templateKey` / `templatePath` 提供出错目标，`error` 提供可读说明。Rust 按错误码处理，不匹配错误文案。
+
+Python 在统一模板读取入口抛出 `TemplateLoadError`，请求边界返回结构化错误。Rust CV 层将其转换为 `CvError::TemplateLoad`，自动化业务层以 `AutomationError::Cv` 包装并通过 `Result` 和 `?` 逐层返回（文件读写错误则保留为 `AutomationError::Io`），最外层 `run()` 将任务设为失败并汇报。原有重试和坐标兜底仅处理普通识别错误，模板加载错误会直接退出；客户端统一负责清理和缓存健康检查。
+
+完整模板检查仅在用户执行“自检”时进行：分别检查日服和国服的 PNG 可解码性、构建时记录的随包模板清单，以及合并共享配置后的 screen、variant、element 和候选模板引用是否存在。随包清单也能发现代码内部直接引用的 PNG 在安装后丢失。每次启动自动化不额外遍历所有配置目标。
+
 ```mermaid
 stateDiagram-v2
     state QuestSetup {

@@ -30,6 +30,7 @@ const projects: Project[] = [
 ];
 
 const selfCheckStatus: SelfCheckStatus = {
+  templates: [],
   appVersion: "0.5.4",
   cvRuntimeVersion: "2026.05.08-runtime1",
   cvRuntimeInstalled: true,

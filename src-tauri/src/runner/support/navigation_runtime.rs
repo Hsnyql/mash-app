@@ -53,18 +53,18 @@ impl Runner {
     /// so the threshold can be tuned from real numbers; transient sidecar
     /// errors degrade to `false` so a CV blip just means "keep scrolling"
     /// instead of triggering a refresh loop.
-    pub(crate) fn support_scroll_bar_at_end(&mut self) -> bool {
-        match self.sidecar().find_element_by_name(
-            None,
-            SUPPORT_SELECT_SCREEN,
-            SUPPORT_SCROLL_END_ELEMENT,
-        ) {
+    pub(crate) fn support_scroll_bar_at_end(&mut self) -> AutomationResult<bool> {
+        match self
+            .sidecar()
+            .find_element_by_name(None, SUPPORT_SELECT_SCREEN, SUPPORT_SCROLL_END_ELEMENT)
+            .recoverable()?
+        {
             Ok(m) if m.found => {
                 eprintln!(
                     "[runner] scroll-bar-end score={:.3} -> {}",
                     m.score, "AT-BOTTOM",
                 );
-                return true;
+                return Ok(true);
             }
             Ok(m) => {
                 eprintln!(
@@ -78,50 +78,58 @@ impl Runner {
         }
 
         if self.support_scroll_count > 0 {
-            return false;
+            return Ok(false);
         }
 
-        match self.sidecar().find_element_by_name(
-            None,
-            SUPPORT_SELECT_SCREEN,
-            SUPPORT_SCROLL_START_ELEMENT,
-        ) {
-            Ok(m) if m.found => {
-                eprintln!(
-                    "[runner] scroll-bar-start score={:.3} -> scrollable",
-                    m.score,
-                );
-                false
-            }
-            Ok(m) => {
-                eprintln!(
-                    "[runner] scroll-bar-start score={:.3} -> no-scrollbar",
-                    m.score,
-                );
-                true
-            }
-            Err(e) => {
-                eprintln!("[runner] scroll-bar-start check failed (treating as scrollable): {e}");
-                false
-            }
-        }
+        Ok(
+            match self
+                .sidecar()
+                .find_element_by_name(None, SUPPORT_SELECT_SCREEN, SUPPORT_SCROLL_START_ELEMENT)
+                .recoverable()?
+            {
+                Ok(m) if m.found => {
+                    eprintln!(
+                        "[runner] scroll-bar-start score={:.3} -> scrollable",
+                        m.score,
+                    );
+                    false
+                }
+                Ok(m) => {
+                    eprintln!(
+                        "[runner] scroll-bar-start score={:.3} -> no-scrollbar",
+                        m.score,
+                    );
+                    true
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[runner] scroll-bar-start check failed (treating as scrollable): {e}"
+                    );
+                    false
+                }
+            },
+        )
     }
 
-    pub(crate) fn wait_for_support_refresh_available(&mut self) -> bool {
+    pub(crate) fn wait_for_support_refresh_available(&mut self) -> AutomationResult<bool> {
         let deadline = Instant::now() + SUPPORT_REFRESH_AVAILABLE_TIMEOUT;
         let mut emitted_wait = false;
         loop {
             if self.is_cancelled() {
-                return false;
+                return Ok(false);
             }
-            match self.sidecar().find_element_by_name(
-                None,
-                SUPPORT_SELECT_SCREEN,
-                SUPPORT_REFRESH_AVAILABLE_ELEMENT,
-            ) {
+            match self
+                .sidecar()
+                .find_element_by_name(
+                    None,
+                    SUPPORT_SELECT_SCREEN,
+                    SUPPORT_REFRESH_AVAILABLE_ELEMENT,
+                )
+                .recoverable()?
+            {
                 Ok(m) if m.found => {
                     eprintln!("[runner] support-refresh score={:.3} -> available", m.score);
-                    return true;
+                    return Ok(true);
                 }
                 Ok(m) => {
                     eprintln!("[runner] support-refresh score={:.3} -> cooldown", m.score);
@@ -132,7 +140,7 @@ impl Runner {
                 }
                 Err(e)
                     if is_unknown_element_error(
-                        &e,
+                        &e.to_string(),
                         SUPPORT_SELECT_SCREEN,
                         SUPPORT_REFRESH_AVAILABLE_ELEMENT,
                     ) =>
@@ -140,7 +148,7 @@ impl Runner {
                     eprintln!(
                         "[runner] support-refresh availability probe not configured; tapping directly"
                     );
-                    return true;
+                    return Ok(true);
                 }
                 Err(e) => {
                     eprintln!("[runner] support-refresh availability probe failed: {e}");
@@ -152,7 +160,7 @@ impl Runner {
             }
             if Instant::now() >= deadline {
                 self.fail_action("SupportSelect", "等待助战刷新", "刷新按钮仍不可用".into());
-                return false;
+                return Ok(false);
             }
             thread::sleep(SUPPORT_REFRESH_AVAILABLE_POLL);
         }
@@ -180,28 +188,28 @@ impl Runner {
     /// After tapping the support-list refresh button, confirm the modal when
     /// the server's cv.json defines one. Servers without a modal template
     /// fall back to the legacy fixed settle delay.
-    pub(crate) fn confirm_support_refresh_dialog_if_needed(&mut self) -> bool {
+    pub(crate) fn confirm_support_refresh_dialog_if_needed(&mut self) -> AutomationResult<bool> {
         let appear_deadline = std::time::Instant::now() + SUPPORT_REFRESH_DIALOG_APPEAR_TIMEOUT;
         loop {
             if self.is_cancelled() {
-                return false;
+                return Ok(false);
             }
-            match self.sidecar().find_element_by_name(
-                None,
-                SUPPORT_SELECT_SCREEN,
-                SUPPORT_REFRESH_DIALOG_ELEMENT,
-            ) {
+            match self
+                .sidecar()
+                .find_element_by_name(None, SUPPORT_SELECT_SCREEN, SUPPORT_REFRESH_DIALOG_ELEMENT)
+                .recoverable()?
+            {
                 Ok(m) if m.found => break,
                 Ok(_) => {}
                 Err(e)
                     if is_unknown_element_error(
-                        &e,
+                        &e.to_string(),
                         SUPPORT_SELECT_SCREEN,
                         SUPPORT_REFRESH_DIALOG_ELEMENT,
                     ) =>
                 {
                     thread::sleep(SUPPORT_REFRESH_SETTLE);
-                    return true;
+                    return Ok(true);
                 }
                 Err(e) => {
                     eprintln!("[runner] refresh dialog probe failed (treating as absent): {e}");
@@ -210,55 +218,55 @@ impl Runner {
             }
             if std::time::Instant::now() >= appear_deadline {
                 thread::sleep(SUPPORT_REFRESH_SETTLE);
-                return true;
+                return Ok(true);
             }
             thread::sleep(SUPPORT_REFRESH_DIALOG_POLL);
         }
 
         thread::sleep(SUPPORT_REFRESH_DIALOG_CONFIRM_SETTLE);
         if self.is_cancelled() {
-            return false;
+            return Ok(false);
         }
 
         self.emit("SupportSelect", "助战刷新需要确认，点击确定");
         if !self.tap_at("SupportSelect", SUPPORT_REFRESH_CONFIRM_BUTTON) {
-            return false;
+            return Ok(false);
         }
 
         let dismiss_deadline = std::time::Instant::now() + SUPPORT_REFRESH_DIALOG_DISMISS_TIMEOUT;
         loop {
             if self.is_cancelled() {
-                return false;
+                return Ok(false);
             }
-            match self.sidecar().find_element_by_name(
-                None,
-                SUPPORT_SELECT_SCREEN,
-                SUPPORT_REFRESH_DIALOG_ELEMENT,
-            ) {
+            match self
+                .sidecar()
+                .find_element_by_name(None, SUPPORT_SELECT_SCREEN, SUPPORT_REFRESH_DIALOG_ELEMENT)
+                .recoverable()?
+            {
                 Ok(m) if !m.found => {
                     thread::sleep(SUPPORT_REFRESH_DIALOG_POLL);
-                    return true;
+                    return Ok(true);
                 }
                 Ok(_) => {}
                 Err(e)
                     if is_unknown_element_error(
-                        &e,
+                        &e.to_string(),
                         SUPPORT_SELECT_SCREEN,
                         SUPPORT_REFRESH_DIALOG_ELEMENT,
                     ) =>
                 {
                     thread::sleep(SUPPORT_REFRESH_SETTLE);
-                    return true;
+                    return Ok(true);
                 }
                 Err(e) => {
                     eprintln!("[runner] refresh dialog disappearance probe failed: {e}");
                     thread::sleep(SUPPORT_REFRESH_SETTLE);
-                    return true;
+                    return Ok(true);
                 }
             }
             if std::time::Instant::now() >= dismiss_deadline {
                 self.emit("SupportSelect", "等待助战刷新确认关闭超时");
-                return false;
+                return Ok(false);
             }
             thread::sleep(SUPPORT_REFRESH_DIALOG_POLL);
         }
@@ -268,7 +276,7 @@ impl Runner {
     /// pinned a support servant. Mirrors the pre-OCR behaviour so existing
     /// projects don't regress; new setups should pin a servant via the
     /// team-builder support slot to engage the OCR-based flow above.
-    pub(crate) fn legacy_pick_first_support(&mut self) {
+    pub(crate) fn legacy_pick_first_support(&mut self) -> AutomationResult<()> {
         if let Some(name) = self.config.support_servant_name.clone() {
             let region = NormRect {
                 x: 0.0,
@@ -276,15 +284,19 @@ impl Runner {
                 w: 1.0,
                 h: 0.75,
             };
-            if let Ok(Some(pos)) = self.sidecar().find_element(None, &name, region, 0.8) {
+            if let Ok(Some(pos)) = self
+                .sidecar()
+                .find_element(None, &name, region, 0.8)
+                .recoverable()?
+            {
                 self.emit("SupportSelect", &format!("找到助战从者: {name}"));
                 if !self.tap_at("SupportSelect", pos) {
-                    return;
+                    return Ok(());
                 }
                 self.support_selected = true;
                 self.support_scroll_count = 0;
                 thread::sleep(ACTION_DELAY);
-                return;
+                return Ok(());
             }
             // Template miss → fall through to scroll/refresh below.
             if self.support_scroll_count < self.config.max_support_scrolls {
@@ -294,25 +306,26 @@ impl Runner {
                     Point::new(0.50, 0.30),
                     300,
                 ) {
-                    return;
+                    return Ok(());
                 }
                 self.support_scroll_count += 1;
                 thread::sleep(ACTION_DELAY);
             } else {
                 if !self.tap_at("SupportSelect", Point::new(0.92, 0.08)) {
-                    return;
+                    return Ok(());
                 }
                 self.support_scroll_count = 0;
                 thread::sleep(Duration::from_secs(2));
             }
-            return;
+            return Ok(());
         }
 
         self.emit("SupportSelect", "选择第一个助战从者");
         if !self.tap_at("SupportSelect", Point::new(0.50, 0.35)) {
-            return;
+            return Ok(());
         }
         self.support_selected = true;
         thread::sleep(ACTION_DELAY);
+        Ok(())
     }
 }

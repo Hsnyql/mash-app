@@ -186,6 +186,7 @@ vi.mock("@tauri-apps/api/core", () => ({
         return {
           appVersion: "0.5.4",
           cvRuntimeVersion: "2026.05.08-runtime1",
+          templates: [],
           cvRuntimeInstalled: false,
           cvCodeVersion: "2026.05.08-code1",
           cvCodeInstalled: false,

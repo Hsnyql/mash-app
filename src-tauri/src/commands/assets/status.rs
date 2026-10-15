@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod templates;
+
 #[derive(serde::Serialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AssetBundleStatus {
@@ -44,6 +46,7 @@ pub(crate) struct SelfCheckStatus {
     pub(crate) app_assets_version: u32,
     pub(crate) servants: SelfCheckAssetGroup,
     pub(crate) ces: SelfCheckAssetGroup,
+    pub(crate) templates: Vec<templates::TemplateCheckStatus>,
 }
 
 pub(crate) fn count_files_recursive(dir: &Path) -> Result<u64, String> {
@@ -153,6 +156,17 @@ pub(crate) fn self_check_status_for_app(app: &tauri::AppHandle) -> Result<SelfCh
         app_assets_version: assets.app_assets_version,
         servants: scan_self_check_asset_group(&assets_root.join("servants")),
         ces: scan_self_check_asset_group(&assets_root.join("ces")),
+        templates: [Server::Jp, Server::Cn]
+            .into_iter()
+            .map(|server| {
+                templates::check_templates(
+                    &server.to_string(),
+                    &crate::resolve_template_dirs(app, server),
+                    &crate::resolve_cv_config_paths(app, server),
+                    &templates::shipped_template_keys(&server.to_string()),
+                )
+            })
+            .collect(),
     })
 }
 
@@ -207,6 +221,10 @@ pub(crate) fn get_asset_bundle_status(app: tauri::AppHandle) -> Result<AssetBund
 }
 
 #[tauri::command]
-pub(crate) fn get_self_check_status(app: tauri::AppHandle) -> Result<SelfCheckStatus, String> {
-    self_check_status_for_app(&app)
+pub(crate) async fn get_self_check_status(
+    app: tauri::AppHandle,
+) -> Result<SelfCheckStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || self_check_status_for_app(&app))
+        .await
+        .map_err(|error| format!("自检任务失败: {error}"))?
 }

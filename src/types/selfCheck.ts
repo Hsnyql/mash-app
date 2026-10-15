@@ -14,4 +14,11 @@ export interface SelfCheckStatus {
   appAssetsVersion: number;
   servants: SelfCheckAssetGroup;
   ces: SelfCheckAssetGroup;
+  templates: SelfCheckTemplateGroup[];
+}
+
+export interface SelfCheckTemplateGroup {
+  server: string;
+  checked: number;
+  errors: string[];
 }

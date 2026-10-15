@@ -2,6 +2,10 @@
 
 本流程由 `src-tauri/src/craft_essence_enhancement_runner.rs` facade 与 `src-tauri/src/craft_essence_enhancement_runner/` 子模块驱动，Tauri lifecycle command 位于 `src-tauri/src/commands/automation/craft_essence.rs`，当前仅支持国服。它不依赖从者强化 runner；两者只共享 ADB、视频流、识图和运行互斥基础设施。
 
+实际使用的模板加载失败时，任务进入 `Error` 并显示模板名或路径；后续识别、点击、滑动和坐标兜底全部停止，失败的 sidecar 不再缓存。完整的模板文件和配置引用检查由“自检”执行，任务启动不额外遍历所有目标。
+
+Python 在统一模板读取入口抛出 `TemplateLoadError`，请求边界返回结构化错误。Rust CV 层将其转换为 `CvError::TemplateLoad`，自动化业务层以 `AutomationError::Cv` 包装并通过 `Result` 和 `?` 逐层返回（文件读写错误则保留为 `AutomationError::Io`），最外层 `run()` 将任务设为失败并汇报。原有重试和坐标兜底仅处理普通识别错误，模板加载错误会直接退出；客户端统一负责清理和缓存健康检查。
+
 页面提供两个独立策略：
 
 1. `qpEfficient`（节省 QP 策略）：保持原有流程。优先使用已锁定、满破、未满 50 级的 1 星礼装；不足时用 5 张同名 1 星制作并安全锁定新底卡，通过经验包集中转移经验，直到得到 8 个 50 级丸子。

@@ -247,8 +247,8 @@ pub(crate) fn is_battle_result_screen(screen: Screen) -> bool {
 }
 
 impl Runner {
-    pub(crate) fn handle_battle_result_bond(&mut self) {
-        let detected_label = match self.sidecar().detect_label_full(None) {
+    pub(crate) fn handle_battle_result_bond(&mut self) -> AutomationResult<()> {
+        let detected_label = match self.sidecar().detect_label_full(None).recoverable()? {
             Ok((label, _score)) => label,
             Err(err) => {
                 self.emit_warn(
@@ -262,7 +262,7 @@ impl Runner {
 
         if is_level_up_overlay {
             if self.config.auto_capture_bond_level_up {
-                match self.capture_bond_level_up_screenshot() {
+                match self.capture_bond_level_up_screenshot().recoverable()? {
                     Ok(path) => self.emit(
                         "BattleResultBond",
                         &format!("牵绊升级截图已保存: {}", path.display()),
@@ -277,7 +277,11 @@ impl Runner {
             // Always read and log the level. Previously this was only called
             // for the max-level stop setting, leaving ordinary level-up
             // overlays unobserved and unlogged.
-            let read = match self.sidecar().read_bond_level_up(None, false) {
+            let read = match self
+                .sidecar()
+                .read_bond_level_up(None, false)
+                .recoverable()?
+            {
                 Ok(result) if result.ok => Some(result),
                 Ok(result) => {
                     let reason = result.reason.unwrap_or_else(|| "未知原因".into());
@@ -312,7 +316,7 @@ impl Runner {
                         &format!("检测到牵绊等级提升{level}，自动停止"),
                     );
                     self.transition_lifecycle(RunnerLifecycleEvent::Finished);
-                    return;
+                    return Ok(());
                 }
                 BondResultStopAction::StopOnMaxLevel => {
                     let level = read
@@ -324,7 +328,7 @@ impl Runner {
                         &format!("检测到牵绊等级达到 {level}，自动停止"),
                     );
                     self.transition_lifecycle(RunnerLifecycleEvent::Finished);
-                    return;
+                    return Ok(());
                 }
                 BondResultStopAction::Continue => {}
             }
@@ -350,10 +354,11 @@ impl Runner {
             BATTLE_RESULT_BOND_NEXT,
             BATTLE_RESULT_TAP_INTERVAL,
             BATTLE_RESULT_TAP_TIMEOUT,
-        );
+        )?;
+        Ok(())
     }
 
-    pub(crate) fn handle_battle_result_exp(&mut self) {
+    pub(crate) fn handle_battle_result_exp(&mut self) -> AutomationResult<()> {
         self.emit("BattleResultExp", "经验结算，前往下一画面");
         self.tap_until_screen_changes(
             "BattleResultExp",
@@ -361,15 +366,16 @@ impl Runner {
             BATTLE_RESULT_EXP_NEXT,
             BATTLE_RESULT_TAP_INTERVAL,
             BATTLE_RESULT_TAP_TIMEOUT,
-        );
+        )?;
+        Ok(())
     }
 
-    pub(crate) fn handle_battle_result_loot(&mut self) {
+    pub(crate) fn handle_battle_result_loot(&mut self) -> AutomationResult<()> {
         if !self.battle_result_loot_handled {
             self.battle_result_loot_handled = true;
 
             if self.config.auto_capture_battle_result_loot {
-                match self.capture_battle_result_loot_screenshot() {
+                match self.capture_battle_result_loot_screenshot().recoverable()? {
                     Ok(path) => self.emit(
                         "BattleResultLoot",
                         &format!("战利品截图已保存: {}", path.display()),
@@ -384,7 +390,7 @@ impl Runner {
             if self.config.stop_on_five_star_ce_drop {
                 let target =
                     five_star_ce_drop_target_count(self.config.five_star_ce_drop_target_count);
-                match self.count_visible_five_star_ce_drops() {
+                match self.count_visible_five_star_ce_drops().recoverable()? {
                     Ok(new_drops) => {
                         let (next_total, action) = five_star_ce_drop_stop_action(
                             self.five_star_ce_drop_count,
@@ -404,7 +410,7 @@ impl Runner {
                                 &format!("五星礼装掉落累计达到 {target} 个，自动停止"),
                             );
                             self.transition_lifecycle(RunnerLifecycleEvent::Finished);
-                            return;
+                            return Ok(());
                         }
                     }
                     Err(err) => {
@@ -428,6 +434,7 @@ impl Runner {
         let detected_label = self
             .sidecar()
             .detect_label_full(None)
+            .recoverable()?
             .map(|(label, _score)| label)
             .unwrap_or_else(|_| Screen::BattleResultLoot.to_string());
         self.tap_until_screen_label_changes(
@@ -436,10 +443,11 @@ impl Runner {
             BATTLE_RESULT_LOOT_NEXT,
             BATTLE_RESULT_TAP_INTERVAL,
             BATTLE_RESULT_TAP_TIMEOUT,
-        );
+        )?;
+        Ok(())
     }
 
-    fn count_visible_five_star_ce_drops(&mut self) -> Result<u32, String> {
+    fn count_visible_five_star_ce_drops(&mut self) -> AutomationResult<u32> {
         let path = resolve_resource_image_path(&self.app_handle, FIVE_STAR_CE_TEMPLATE_FILE_NAME)
             .ok_or_else(|| {
             format!("未找到五星礼装星级模板: {FIVE_STAR_CE_TEMPLATE_FILE_NAME}")
@@ -466,9 +474,9 @@ impl Runner {
         Ok(count)
     }
 
-    fn capture_battle_result_loot_screenshot(&mut self) -> Result<PathBuf, String> {
+    fn capture_battle_result_loot_screenshot(&mut self) -> AutomationResult<PathBuf> {
         let dir = battle_result_loot_screenshot_dir(&self.app_handle);
-        std::fs::create_dir_all(&dir).map_err(|err| format!("创建战利品截图目录失败: {err}"))?;
+        std::fs::create_dir_all(&dir).context("创建战利品截图目录失败")?;
         let path = dir.join(battle_result_loot_screenshot_filename(
             std::time::SystemTime::now(),
             self.completed_mission_runs,
@@ -476,14 +484,14 @@ impl Runner {
         let jpeg = self
             .sidecar()
             .get_frame_jpeg(LOOT_SCREENSHOT_WAIT_SECONDS)
-            .map_err(|err| format!("获取视频帧失败: {err}"))?;
-        std::fs::write(&path, jpeg).map_err(|err| format!("写入截图失败: {err}"))?;
+            .context("获取视频帧失败")?;
+        std::fs::write(&path, jpeg).context("写入截图失败")?;
         Ok(path)
     }
 
-    fn capture_bond_level_up_screenshot(&mut self) -> Result<PathBuf, String> {
+    fn capture_bond_level_up_screenshot(&mut self) -> AutomationResult<PathBuf> {
         let dir = bond_level_up_screenshot_dir(&self.app_handle);
-        std::fs::create_dir_all(&dir).map_err(|err| format!("创建牵绊升级截图目录失败: {err}"))?;
+        std::fs::create_dir_all(&dir).context("创建牵绊升级截图目录失败")?;
         let path = dir.join(bond_level_up_screenshot_filename(
             std::time::SystemTime::now(),
             self.completed_mission_runs,
@@ -491,15 +499,16 @@ impl Runner {
         let jpeg = self
             .sidecar()
             .get_frame_jpeg(LOOT_SCREENSHOT_WAIT_SECONDS)
-            .map_err(|err| format!("获取视频帧失败: {err}"))?;
-        std::fs::write(&path, jpeg).map_err(|err| format!("写入截图失败: {err}"))?;
+            .context("获取视频帧失败")?;
+        std::fs::write(&path, jpeg).context("写入截图失败")?;
         Ok(path)
     }
 
-    pub(crate) fn capture_unknown_screen_timeout_screenshot(&mut self) -> Result<PathBuf, String> {
+    pub(crate) fn capture_unknown_screen_timeout_screenshot(
+        &mut self,
+    ) -> AutomationResult<PathBuf> {
         let dir = unknown_screen_timeout_screenshot_dir(&self.app_handle);
-        std::fs::create_dir_all(&dir)
-            .map_err(|err| format!("创建无法识别画面截图目录失败: {err}"))?;
+        std::fs::create_dir_all(&dir).context("创建无法识别画面截图目录失败")?;
         let path = dir.join(unknown_screen_timeout_screenshot_filename(
             std::time::SystemTime::now(),
             self.completed_mission_runs,
@@ -507,15 +516,15 @@ impl Runner {
         let jpeg = self
             .sidecar()
             .get_frame_jpeg(UNKNOWN_SCREEN_TIMEOUT_SCREENSHOT_WAIT_SECONDS)
-            .map_err(|err| format!("获取视频帧失败: {err}"))?;
-        std::fs::write(&path, jpeg).map_err(|err| format!("写入截图失败: {err}"))?;
+            .context("获取视频帧失败")?;
+        std::fs::write(&path, jpeg).context("写入截图失败")?;
         Ok(path)
     }
 
-    pub(crate) fn handle_battle_result_friend_request(&mut self) {
+    pub(crate) fn handle_battle_result_friend_request(&mut self) -> AutomationResult<()> {
         if self.battle_result_friend_request_handled {
             thread::sleep(BATTLE_RESULT_TAP_INTERVAL);
-            return;
+            return Ok(());
         }
         self.battle_result_friend_request_handled = true;
         let should_request = self.config.auto_friend_request
@@ -527,6 +536,7 @@ impl Runner {
                     BATTLE_RESULT_FRIEND_REQUEST_REGION,
                     0.85,
                 )
+                .recoverable()?
                 .ok()
                 .flatten()
                 .is_some();
@@ -536,9 +546,9 @@ impl Runner {
             ("跳过好友申请", BATTLE_RESULT_FRIEND_SKIP)
         };
         self.emit("BattleResultFriendRequest", message);
-        if self.tap_at("BattleResultFriendRequest", point) {
+        Ok(if self.tap_at("BattleResultFriendRequest", point) {
             thread::sleep(ACTION_DELAY);
-        }
+        })
     }
 
     /// Final continue page. Branches on `RunConfig::repeat_mission`:

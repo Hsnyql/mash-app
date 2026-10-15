@@ -171,16 +171,16 @@ impl Runner {
     pub(crate) fn find_ap_recovery_item(
         &mut self,
         item: ApRecoveryTemplate,
-    ) -> Result<Option<Point>, String> {
-        self.sidecar().find_enabled_ap_recovery_item(
+    ) -> AutomationResult<Option<Point>> {
+        Ok(self.sidecar().find_enabled_ap_recovery_item(
             None,
             item.template_key,
             AP_RECOVERY_ITEMS_REGION,
             AP_RECOVERY_ITEM_THRESHOLD,
-        )
+        )?)
     }
 
-    pub(crate) fn ap_recovery_list_visible(&mut self) -> Result<bool, String> {
+    pub(crate) fn ap_recovery_list_visible(&mut self) -> AutomationResult<bool> {
         for &(template_key, reference_width) in ap_recovery_list_label_probes(self.server) {
             let found = match reference_width {
                 Some(reference_width) => self.sidecar().find_element_with_reference_width(
@@ -208,63 +208,72 @@ impl Runner {
         &mut self,
         item: ApRecoveryTemplate,
         point: Point,
-    ) -> ApRecoveryUseOutcome {
+    ) -> AutomationResult<ApRecoveryUseOutcome> {
         self.emit("APRecovery", &format!("行动力不足，使用{}", item.label));
         if !self.tap_at("APRecovery", point) {
-            return ApRecoveryUseOutcome::Failed;
+            return Ok(ApRecoveryUseOutcome::Failed);
         }
         thread::sleep(AP_RECOVERY_TAP_SETTLE);
 
-        let Some(confirm_point) = self.wait_for_ap_recovery_confirm(item.item) else {
-            return ApRecoveryUseOutcome::Failed;
+        let Some(confirm_point) = self.wait_for_ap_recovery_confirm(item.item)? else {
+            return Ok(ApRecoveryUseOutcome::Failed);
         };
         if !self.tap_at("APRecovery", confirm_point) {
-            return ApRecoveryUseOutcome::Failed;
+            return Ok(ApRecoveryUseOutcome::Failed);
         }
         thread::sleep(AP_RECOVERY_TAP_SETTLE);
-        self.wait_for_ap_recovery_to_close()
+        Ok(self.wait_for_ap_recovery_to_close()?)
     }
 
-    fn wait_for_ap_recovery_confirm(&mut self, item: ApRecoveryItem) -> Option<Point> {
+    fn wait_for_ap_recovery_confirm(
+        &mut self,
+        item: ApRecoveryItem,
+    ) -> AutomationResult<Option<Point>> {
         let start = Instant::now();
         loop {
             if self.is_cancelled() {
-                return None;
+                return Ok(None);
             }
-            match self.sidecar().find_element(
-                None,
-                AP_RECOVERY_CONFIRM_TEMPLATE,
-                ap_recovery_confirm_region(item),
-                0.8,
-            ) {
-                Ok(Some(point)) => return Some(point),
+            match self
+                .sidecar()
+                .find_element(
+                    None,
+                    AP_RECOVERY_CONFIRM_TEMPLATE,
+                    ap_recovery_confirm_region(item),
+                    0.8,
+                )
+                .recoverable()?
+            {
+                Ok(Some(point)) => return Ok(Some(point)),
                 Ok(None) => {}
                 Err(err) => {
-                    self.fail_action("APRecovery", "识别苹果使用确认弹窗", err);
-                    return None;
+                    self.fail_action("APRecovery", "识别苹果使用确认弹窗", err.to_string());
+                    return Ok(None);
                 }
             }
             if start.elapsed() >= AP_RECOVERY_CONFIRM_APPEAR_TIMEOUT {
                 self.emit_warn("APRecovery", "未检测到苹果使用确认弹窗，返回主循环重试");
-                return None;
+                return Ok(None);
             }
             thread::sleep(AP_RECOVERY_CONFIRM_APPEAR_POLL);
         }
     }
 
-    fn wait_for_ap_recovery_to_close(&mut self) -> ApRecoveryUseOutcome {
+    fn wait_for_ap_recovery_to_close(&mut self) -> AutomationResult<ApRecoveryUseOutcome> {
         let start = Instant::now();
         loop {
             if self.is_cancelled() {
-                return ApRecoveryUseOutcome::Failed;
+                return Ok(ApRecoveryUseOutcome::Failed);
             }
-            match self.sidecar().detect(None) {
+            match self.sidecar().detect(None).recoverable()? {
                 Ok(screen) => match classify_ap_recovery_close_observation(screen) {
                     ApRecoveryCloseObservation::StillOpen => {}
-                    ApRecoveryCloseObservation::Closed => return ApRecoveryUseOutcome::Confirmed,
+                    ApRecoveryCloseObservation::Closed => {
+                        return Ok(ApRecoveryUseOutcome::Confirmed)
+                    }
                     ApRecoveryCloseObservation::Obscured => {
                         self.emit_debug("APRecovery", "确认后画面暂时无法识别，交回主循环处理");
-                        return ApRecoveryUseOutcome::Pending;
+                        return Ok(ApRecoveryUseOutcome::Pending);
                     }
                 },
                 Err(err) => {
@@ -273,7 +282,7 @@ impl Runner {
             }
             if start.elapsed() >= AP_RECOVERY_CLOSE_TIMEOUT {
                 self.emit_warn("APRecovery", "等待行动力回复页面关闭超时，返回主循环重试");
-                return ApRecoveryUseOutcome::Failed;
+                return Ok(ApRecoveryUseOutcome::Failed);
             }
             thread::sleep(AP_RECOVERY_CLOSE_POLL);
         }
@@ -296,43 +305,47 @@ impl Runner {
         }
     }
 
-    pub(crate) fn handle_ap_recovery(&mut self) {
+    pub(crate) fn handle_ap_recovery(&mut self) -> AutomationResult<()> {
         if self.config.ap_recovery_items.is_empty() {
             self.emit("APRecovery", "行动力不足且未配置自动吃苹果，停止");
             self.transition_lifecycle(RunnerLifecycleEvent::Finished);
-            return;
+            return Ok(());
         }
 
         if self.available_ap_recovery_items().is_empty() {
             self.emit("APRecovery", "所有已配置苹果均已达到使用上限，停止");
             self.transition_lifecycle(RunnerLifecycleEvent::Finished);
-            return;
+            return Ok(());
         }
 
-        match self.ap_recovery_list_visible() {
+        match self.ap_recovery_list_visible().recoverable()? {
             Ok(true) => {}
             Ok(false) => {
                 self.emit("APRecovery", "未定位到道具列表，等待重试…");
                 thread::sleep(ACTION_DELAY);
-                return;
+                return Ok(());
             }
             Err(err) => {
-                self.fail_action("APRecovery", "定位道具列表", err);
-                return;
+                self.fail_action("APRecovery", "定位道具列表", err.to_string());
+                return Ok(());
             }
         }
 
         for item in self.ap_recovery_candidates(ApRecoveryPage::Top) {
-            match self.find_ap_recovery_item(item) {
+            match self.find_ap_recovery_item(item).recoverable()? {
                 Ok(Some(point)) => {
-                    let outcome = self.tap_ap_recovery_item(item, point);
+                    let outcome = self.tap_ap_recovery_item(item, point)?;
                     self.finish_ap_recovery_attempt(item.item, outcome);
-                    return;
+                    return Ok(());
                 }
                 Ok(None) => {}
                 Err(err) => {
-                    self.fail_action("APRecovery", &format!("识别{}", item.label), err);
-                    return;
+                    self.fail_action(
+                        "APRecovery",
+                        &format!("识别{}", item.label),
+                        err.to_string(),
+                    );
+                    return Ok(());
                 }
             }
         }
@@ -341,7 +354,7 @@ impl Runner {
         if bottom_items.is_empty() {
             self.emit("APRecovery", "已配置苹果数量不足，停止");
             self.transition_lifecycle(RunnerLifecycleEvent::Finished);
-            return;
+            return Ok(());
         }
 
         self.emit("APRecovery", "上半页未找到可用道具，滚动到底部继续查找");
@@ -351,26 +364,31 @@ impl Runner {
             AP_RECOVERY_SCROLL_TO,
             350,
         ) {
-            return;
+            return Ok(());
         }
         thread::sleep(ACTION_DELAY);
 
         for item in bottom_items {
-            match self.find_ap_recovery_item(item) {
+            match self.find_ap_recovery_item(item).recoverable()? {
                 Ok(Some(point)) => {
-                    let outcome = self.tap_ap_recovery_item(item, point);
+                    let outcome = self.tap_ap_recovery_item(item, point)?;
                     self.finish_ap_recovery_attempt(item.item, outcome);
-                    return;
+                    return Ok(());
                 }
                 Ok(None) => {}
                 Err(err) => {
-                    self.fail_action("APRecovery", &format!("识别{}", item.label), err);
-                    return;
+                    self.fail_action(
+                        "APRecovery",
+                        &format!("识别{}", item.label),
+                        err.to_string(),
+                    );
+                    return Ok(());
                 }
             }
         }
 
         self.emit("APRecovery", "所有已配置苹果数量不足，停止");
         self.transition_lifecycle(RunnerLifecycleEvent::Finished);
+        Ok(())
     }
 }

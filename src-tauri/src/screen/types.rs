@@ -830,6 +830,26 @@ pub enum Screen {
     Unknown,
 }
 
+pub(super) const BATTLE_DETECTION_SCREENS: &[&str] = &[
+    "RankUpQuest",
+    "TeamConfirm",
+    "TeamChange",
+    "SupportSelect",
+    "ServantSelect",
+    "Battle",
+    "Attack",
+    "BattleResultLoot",
+    "BattleResultLootEvent",
+    "BattleResultExp",
+    "BattleResultExpLevelUp",
+    "BattleResultMasterLevelUp",
+    "BattleResultBond",
+    "BattleResultBondLevelUp",
+    "BattleResultContinue",
+    "BattleResultFriendRequest",
+    "APRecovery",
+];
+
 impl std::fmt::Display for Screen {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

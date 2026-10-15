@@ -97,29 +97,33 @@ impl Runner {
     }
 
     /// Called after pre-attack NP sampling and before tapping the Attack button.
-    pub(crate) fn capture_before_attack_if_enabled(&mut self) {
+    pub(crate) fn capture_before_attack_if_enabled(&mut self) -> AutomationResult<()> {
         if !self.config.auto_capture_battle_before_attack {
-            return;
+            return Ok(());
         }
-        match self.capture_battle_before_attack_screenshot() {
-            Ok(path) => self.emit_debug(
-                "Battle",
-                &format!("点击攻击前截图已保存: {}", path.display()),
-            ),
-            Err(err) => self.emit_warn(
-                "Battle",
-                &format!("点击攻击前截图保存失败，继续攻击: {err}"),
-            ),
-        }
+        Ok(
+            match self
+                .capture_battle_before_attack_screenshot()
+                .recoverable()?
+            {
+                Ok(path) => self.emit_debug(
+                    "Battle",
+                    &format!("点击攻击前截图已保存: {}", path.display()),
+                ),
+                Err(err) => self.emit_warn(
+                    "Battle",
+                    &format!("点击攻击前截图保存失败，继续攻击: {err}"),
+                ),
+            },
+        )
     }
 
-    fn capture_battle_before_attack_screenshot(&mut self) -> Result<PathBuf, String> {
+    fn capture_battle_before_attack_screenshot(&mut self) -> AutomationResult<PathBuf> {
         let dir = battle_before_attack_screenshot_dir_in_root(
             &crate::app_data_dir(&self.app_handle),
             self.server,
         );
-        std::fs::create_dir_all(&dir)
-            .map_err(|err| format!("创建点击攻击前截图目录失败: {err}"))?;
+        std::fs::create_dir_all(&dir).context("创建点击攻击前截图目录失败")?;
         let path = dir.join(battle_before_attack_screenshot_filename(
             std::time::SystemTime::now(),
             self.server,
@@ -130,8 +134,8 @@ impl Runner {
         let png = self
             .sidecar()
             .get_frame_png(0.0)
-            .map_err(|err| format!("获取点击攻击前视频帧失败: {err}"))?;
-        std::fs::write(&path, png).map_err(|err| format!("写入点击攻击前截图失败: {err}"))?;
+            .context("获取点击攻击前视频帧失败")?;
+        std::fs::write(&path, png).context("写入点击攻击前截图失败")?;
         Ok(path)
     }
 }

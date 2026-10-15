@@ -16,12 +16,11 @@ impl Runner {
             .is_some_and(|turn| turn.attack_mode == AttackMode::Critical)
     }
 
-    fn capture_unrecognized_critical_chance_screenshot(&mut self) -> Result<PathBuf, String> {
+    fn capture_unrecognized_critical_chance_screenshot(&mut self) -> AutomationResult<PathBuf> {
         let dir = unrecognized_critical_chance_screenshot_dir_in_root(&crate::app_data_dir(
             &self.app_handle,
         ));
-        std::fs::create_dir_all(&dir)
-            .map_err(|err| format!("创建暴击率识别截图目录失败: {err}"))?;
+        std::fs::create_dir_all(&dir).context("创建暴击率识别截图目录失败")?;
         let path = dir.join(unrecognized_critical_chance_screenshot_filename(
             std::time::SystemTime::now(),
             self.completed_mission_runs,
@@ -29,8 +28,8 @@ impl Runner {
         let jpeg = self
             .sidecar()
             .get_frame_jpeg(0.0)
-            .map_err(|err| format!("获取暴击率识别视频帧失败: {err}"))?;
-        std::fs::write(&path, jpeg).map_err(|err| format!("写入暴击率识别截图失败: {err}"))?;
+            .context("获取暴击率识别视频帧失败")?;
+        std::fs::write(&path, jpeg).context("写入暴击率识别截图失败")?;
         Ok(path)
     }
 
@@ -57,10 +56,13 @@ impl Runner {
         .is_some_and(battle_turn_requires_np_recognition)
     }
 
-    pub(crate) fn execute_next_grand_turn_skills(&mut self, scene: &AdvancedBattleScene) -> bool {
+    pub(crate) fn execute_next_grand_turn_skills(
+        &mut self,
+        scene: &AdvancedBattleScene,
+    ) -> AutomationResult<bool> {
         let scene_index = self.battle.current_scene_index;
         if !self.battle.advanced_startup_done.contains(&scene_index) {
-            return true;
+            return Ok(true);
         }
         let completed_turn_count = *self
             .battle
@@ -68,7 +70,7 @@ impl Runner {
             .get(&scene_index)
             .unwrap_or(&0);
         let Some(turn_actions) = advanced_turn_actions(scene, completed_turn_count) else {
-            return true;
+            return Ok(true);
         };
         let executed_control_count = *self
             .battle
@@ -107,24 +109,24 @@ impl Runner {
                 critical_strategy: CriticalAttackStrategy::default(),
                 advanced_card_strategy: AdvancedCardStrategy::default(),
             };
-            if !self.execute_turn_skills(&turn) {
-                return false;
+            if !self.execute_turn_skills(&turn)? {
+                return Ok(false);
             }
         }
 
         self.battle
             .advanced_turn_indices
             .insert(scene_index, turn_number);
-        true
+        Ok(true)
     }
 
     pub(crate) fn prepare_grand_startup_before_attack(
         &mut self,
         scene: &AdvancedBattleScene,
-    ) -> bool {
+    ) -> AutomationResult<bool> {
         let scene_index = self.battle.current_scene_index;
         if self.battle.advanced_startup_done.contains(&scene_index) {
-            return true;
+            return Ok(true);
         }
         let executed_control_count = *self
             .battle
@@ -170,7 +172,7 @@ impl Runner {
         self.battle.advanced_turn_indices.insert(scene_index, 1);
 
         if startup_actions.is_empty() {
-            return true;
+            return Ok(true);
         }
         let prep_turn = BattleTurn {
             id: scene.id.clone(),
@@ -184,16 +186,16 @@ impl Runner {
             critical_strategy: CriticalAttackStrategy::default(),
             advanced_card_strategy: AdvancedCardStrategy::default(),
         };
-        if !self.execute_turn_skills(&prep_turn) {
-            return false;
+        if !self.execute_turn_skills(&prep_turn)? {
+            return Ok(false);
         }
         self.emit("Battle", "Turn 1 技能完成，进入自动战斗");
-        true
+        Ok(true)
     }
 
-    pub(crate) fn handle_attack(&mut self) {
-        if !self.ensure_battle_speed_level_two() {
-            return;
+    pub(crate) fn handle_attack(&mut self) -> AutomationResult<()> {
+        if !self.ensure_battle_speed_level_two()? {
+            return Ok(());
         }
 
         if self.advanced_mode {
@@ -235,11 +237,11 @@ impl Runner {
                     ));
                     supports
                 });
-            let Some((cards, nps)) = self.read_attack_state(&party_ids, true, false) else {
-                return;
+            let Some((cards, nps)) = self.read_attack_state(&party_ids, true, false)? else {
+                return Ok(());
             };
-            self.handle_advanced_attack(cards, nps, party_ids, party_supports);
-            return;
+            self.handle_advanced_attack(cards, nps, party_ids, party_supports)?;
+            return Ok(());
         }
 
         let party_members = self.normal_current_party_members();
@@ -267,116 +269,124 @@ impl Runner {
             .is_some_and(|turn| turn.attack_mode == AttackMode::Critical)
             || self.config.prefer_higher_critical_chance;
         let Some((cards, nps)) =
-            self.read_attack_state(&party_ids, recognize_command_cards, tolerate_missing_owners)
+            self.read_attack_state(&party_ids, recognize_command_cards, tolerate_missing_owners)?
         else {
-            return;
+            return Ok(());
         };
-        match current_turn
-            .as_ref()
-            .map(|turn| turn.attack_mode)
-            .unwrap_or_default()
-        {
-            AttackMode::Normal => {
-                self.emit("Attack", "普通模式：按配置的攻击优先级选卡");
-                self.pick_and_tap_attack_cards(&cards, &nps, &party_ids, &party_supports, None);
-            }
-            AttackMode::Critical => {
-                let strategy = current_turn
-                    .as_ref()
-                    .map(|turn| &turn.critical_strategy)
-                    .cloned()
-                    .unwrap_or_default();
-                let (picks, summary) = choose_critical_picks(&cards, &party_members, &strategy);
-                let selection = match summary.bonus {
-                    Some(CriticalBonusType::MightyChain) => "精湛连携 +20% 暴击率",
-                    Some(CriticalBonusType::QuickChain) => "迅击连携 +20% 暴击率",
-                    Some(CriticalBonusType::QuickFirst) => "首张迅击 +20% 暴击率",
-                    None => match summary.chain {
-                        Some(CriticalChainType::Buster) => "力击连携",
-                        Some(CriticalChainType::Arts) => "技击连携",
-                        _ => "无额外暴击率加成",
-                    },
-                };
-                self.emit(
-                    "Attack",
-                    &format!(
-                        "暴击模式：{selection}，成员顺序 {}",
-                        if summary.owner_labels.is_empty() {
-                            "待补位".into()
-                        } else {
-                            summary.owner_labels.join(" → ")
-                        }
-                    ),
-                );
-                if summary.relaxed_alternation {
-                    self.emit_warn(
+        Ok(
+            match current_turn
+                .as_ref()
+                .map(|turn| turn.attack_mode)
+                .unwrap_or_default()
+            {
+                AttackMode::Normal => {
+                    self.emit("Attack", "普通模式：按配置的攻击优先级选卡");
+                    self.pick_and_tap_attack_cards(
+                        &cards,
+                        &nps,
+                        &party_ids,
+                        &party_supports,
+                        None,
+                    )?;
+                }
+                AttackMode::Critical => {
+                    let strategy = current_turn
+                        .as_ref()
+                        .map(|turn| &turn.critical_strategy)
+                        .cloned()
+                        .unwrap_or_default();
+                    let (picks, summary) = choose_critical_picks(&cards, &party_members, &strategy);
+                    let selection = match summary.bonus {
+                        Some(CriticalBonusType::MightyChain) => "精湛连携 +20% 暴击率",
+                        Some(CriticalBonusType::QuickChain) => "迅击连携 +20% 暴击率",
+                        Some(CriticalBonusType::QuickFirst) => "首张迅击 +20% 暴击率",
+                        None => match summary.chain {
+                            Some(CriticalChainType::Buster) => "力击连携",
+                            Some(CriticalChainType::Arts) => "技击连携",
+                            _ => "无额外暴击率加成",
+                        },
+                    };
+                    self.emit(
                         "Attack",
                         &format!(
-                            "暴击模式因{}，放宽相邻成员限制并补足选卡",
-                            summary.relaxed_reason.unwrap_or("无法确认可交错的三张卡")
+                            "暴击模式：{selection}，成员顺序 {}",
+                            if summary.owner_labels.is_empty() {
+                                "待补位".into()
+                            } else {
+                                summary.owner_labels.join(" → ")
+                            }
                         ),
                     );
+                    if summary.relaxed_alternation {
+                        self.emit_warn(
+                            "Attack",
+                            &format!(
+                                "暴击模式因{}，放宽相邻成员限制并补足选卡",
+                                summary.relaxed_reason.unwrap_or("无法确认可交错的三张卡")
+                            ),
+                        );
+                    }
+                    self.tap_picks("Attack", &picks, &cards, &party_ids)?;
                 }
-                self.tap_picks("Attack", &picks, &cards, &party_ids);
-            }
-            AttackMode::Advanced => {
-                let strategy = current_turn
-                    .as_ref()
-                    .map(|turn| &turn.advanced_card_strategy)
-                    .cloned()
-                    .unwrap_or_default();
-                let (picks, matched_rule) = choose_ordinary_advanced_picks_with_crit(
-                    &cards,
-                    &nps,
-                    &party_members,
-                    &strategy,
-                    self.config.prefer_higher_critical_chance,
-                );
-                if let Some(rule) = matched_rule {
-                    self.emit("Attack", &format!("高级模式：命中 {rule}"));
-                } else {
-                    self.emit("Attack", "高级模式：无规则命中，按可行动卡从左至右补位");
+                AttackMode::Advanced => {
+                    let strategy = current_turn
+                        .as_ref()
+                        .map(|turn| &turn.advanced_card_strategy)
+                        .cloned()
+                        .unwrap_or_default();
+                    let (picks, matched_rule) = choose_ordinary_advanced_picks_with_crit(
+                        &cards,
+                        &nps,
+                        &party_members,
+                        &strategy,
+                        self.config.prefer_higher_critical_chance,
+                    );
+                    if let Some(rule) = matched_rule {
+                        self.emit("Attack", &format!("高级模式：命中 {rule}"));
+                    } else {
+                        self.emit("Attack", "高级模式：无规则命中，按可行动卡从左至右补位");
+                    }
+                    self.tap_picks("Attack", &picks, &cards, &party_ids)?;
                 }
-                self.tap_picks("Attack", &picks, &cards, &party_ids);
-            }
-        }
+            },
+        )
     }
 
-    fn ensure_battle_speed_level_two(&mut self) -> bool {
+    fn ensure_battle_speed_level_two(&mut self) -> AutomationResult<bool> {
         let mut switch_requested = false;
         loop {
             if self.is_cancelled() {
-                return false;
+                return Ok(false);
             }
-            let speed_two = match self.sidecar().find_element_by_name(
-                None,
-                ATTACK_SCREEN,
-                ATTACK_SCREEN_SPEED_2_ELEMENT,
-            ) {
+            let speed_two = match self
+                .sidecar()
+                .find_element_by_name(None, ATTACK_SCREEN, ATTACK_SCREEN_SPEED_2_ELEMENT)
+                .recoverable()?
+            {
                 Ok(matched) => matched.found,
                 Err(err) => {
-                    self.fail_action("Attack", "检测战斗速度", err);
-                    return false;
+                    self.fail_action("Attack", "检测战斗速度", err.to_string());
+                    return Ok(false);
                 }
             };
             if speed_two {
-                return true;
+                return Ok(true);
             }
-            let speed_one = match self.sidecar().find_element_by_name(
-                None,
-                ATTACK_SCREEN,
-                ATTACK_SCREEN_SPEED_1_ELEMENT,
-            ) {
+            let speed_one = match self
+                .sidecar()
+                .find_element_by_name(None, ATTACK_SCREEN, ATTACK_SCREEN_SPEED_1_ELEMENT)
+                .recoverable()?
+            {
                 Ok(matched) => matched.found,
                 Err(err) => {
-                    self.fail_action("Attack", "检测战斗速度", err);
-                    return false;
+                    self.fail_action("Attack", "检测战斗速度", err.to_string());
+                    return Ok(false);
                 }
             };
             if speed_one && !switch_requested {
                 self.emit("Attack", "检测到战斗速度为一级，现在切换为二级。");
                 if !self.tap_at("Attack", ATTACK_SCREEN_SPEED_BUTTON) {
-                    return false;
+                    return Ok(false);
                 }
                 switch_requested = true;
             }
@@ -415,7 +425,7 @@ impl Runner {
         party_ids: &[Option<u32>; 3],
         recognize_command_cards: bool,
         tolerate_missing_owners: bool,
-    ) -> Option<(Vec<CommandCardMatch>, Vec<NoblePhantasmMatch>)> {
+    ) -> AutomationResult<Option<(Vec<CommandCardMatch>, Vec<NoblePhantasmMatch>)>> {
         let tolerate_missing_owners =
             tolerate_missing_owners || self.config.prefer_higher_critical_chance;
         let recognize_critical_chance = should_log_command_card_crit_chances(
@@ -460,21 +470,20 @@ impl Runner {
             loop {
                 let used_full_party_candidates =
                     self.battle.command_card_owner_fallback_to_full_party;
-                let cards = match self.sidecar().find_command_cards(
-                    None,
-                    None,
-                    &candidate_ids,
-                    assets_dir.as_deref(),
-                ) {
+                let cards = match self
+                    .sidecar()
+                    .find_command_cards(None, None, &candidate_ids, assets_dir.as_deref())
+                    .recoverable()?
+                {
                     Ok(c) => c,
                     Err(err) => {
-                        self.fail_action("Attack", "识别指令卡", err);
-                        return None;
+                        self.fail_action("Attack", "识别指令卡", err.to_string());
+                        return Ok(None);
                     }
                 };
                 if !command_cards_visible(&cards) {
                     if self.is_cancelled() {
-                        return None;
+                        return Ok(None);
                     }
                     self.emit("Attack", "指令卡尚未完全出现，等待卡面稳定后重试");
                     thread::sleep(ACTION_DELAY);
@@ -532,25 +541,29 @@ impl Runner {
                     );
                 }
                 if self.is_cancelled() {
-                    return None;
+                    return Ok(None);
                 }
                 self.emit("Attack", "指令卡从者未识别，等待卡面稳定后重试");
                 thread::sleep(ACTION_DELAY);
             }
         } else {
             let cards = loop {
-                let cards = match self.sidecar().find_command_cards(None, None, &[], None) {
+                let cards = match self
+                    .sidecar()
+                    .find_command_cards(None, None, &[], None)
+                    .recoverable()?
+                {
                     Ok(c) => c,
                     Err(err) => {
-                        self.fail_action("Attack", "等待指令卡出现", err);
-                        return None;
+                        self.fail_action("Attack", "等待指令卡出现", err.to_string());
+                        return Ok(None);
                     }
                 };
                 if command_cards_visible(&cards) {
                     break cards;
                 }
                 if self.is_cancelled() {
-                    return None;
+                    return Ok(None);
                 }
                 self.emit("Attack", "指令卡尚未完全出现，等待卡面稳定后重试");
                 thread::sleep(ACTION_DELAY);
@@ -569,7 +582,10 @@ impl Runner {
             recognize_critical_chance,
             &cards,
         ) {
-            match self.capture_unrecognized_critical_chance_screenshot() {
+            match self
+                .capture_unrecognized_critical_chance_screenshot()
+                .recoverable()?
+            {
                 Ok(path) => self.emit(
                     "Attack",
                     &format!("无法识别暴击率截图已保存: {}", path.display()),
@@ -588,11 +604,15 @@ impl Runner {
         } else {
             match np_detection_mode {
                 NoblePhantasmDetectionMode::Card => loop {
-                    let mut nps = match self.sidecar().find_noble_phantasms(None, None) {
+                    let mut nps = match self
+                        .sidecar()
+                        .find_noble_phantasms(None, None)
+                        .recoverable()?
+                    {
                         Ok(n) => n,
                         Err(err) => {
-                            self.fail_action("Attack", "识别宝具卡", err);
-                            return None;
+                            self.fail_action("Attack", "识别宝具卡", err.to_string());
+                            return Ok(None);
                         }
                     };
                     self.emit_np_recognition_diagnostics("Attack", &nps);
@@ -602,14 +622,14 @@ impl Runner {
                         break nps;
                     }
                     if self.is_cancelled() {
-                        return None;
+                        return Ok(None);
                     }
                     self.emit("Attack", "宝具卡尚未识别完整，等待卡面稳定后重试");
                     thread::sleep(ACTION_DELAY);
                 },
                 NoblePhantasmDetectionMode::Gauge => {
-                    let Some(nps) = self.read_noble_phantasm_gauges("Attack", false) else {
-                        return None;
+                    let Some(nps) = self.read_noble_phantasm_gauges("Attack", false)? else {
+                        return Ok(None);
                     };
                     nps
                 }
@@ -620,7 +640,7 @@ impl Runner {
                             "读取攻击前宝具条",
                             "未找到攻击前缓存的宝具条识别结果".into(),
                         );
-                        return None;
+                        return Ok(None);
                     };
                     nps
                 }
@@ -692,6 +712,6 @@ impl Runner {
             self.battle.pre_attack_nps = None;
         }
 
-        Some((cards, nps))
+        Ok(Some((cards, nps)))
     }
 }
