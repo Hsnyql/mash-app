@@ -106,6 +106,11 @@ Python 边界。平台行为由符号链接/权限、可执行文件名、中文
 updater 签名是两个独立机制；如需 Authenticode，另外配置 Tauri Windows
 签名设置与证书。
 
+NSIS 安装器在覆盖文件前，按完整可执行文件路径停止安装目录内的 ADB
+进程并等待其退出，释放 `AdbWinApi.dll` 等文件。这也适用于旧版 Mash
+退出后遗留的 ADB 服务；不会结束其他安装目录或其他工具的 ADB。
+无法停止时会中止安装，避免在 DLL 仍被占用时继续覆盖。
+
 ```powershell
 $env:TAURI_SIGNING_PRIVATE_KEY = '私钥路径'
 $env:R2_ENDPOINT = 'R2 endpoint'
