@@ -14,7 +14,7 @@ import struct
 import subprocess
 import sys
 import tempfile
-from urllib.parse import urlsplit
+import urllib.request
 import zipfile
 import zlib
 
@@ -27,32 +27,14 @@ def digest(path: Path) -> str:
 
 
 def download(url: str, output: Path, expected: str) -> None:
-    config = {name: os.environ.get(name, "") for name in ("RELEASE_BASE_URL", "R2_ENDPOINT", "R2_BUCKET")}
-    for name, value in config.items():
-        if not value:
-            raise ValueError(f"{name} is required for R2 downloads")
-    for value in (url, config["RELEASE_BASE_URL"], config["R2_ENDPOINT"]):
-        parsed = urlsplit(value)
-        if (parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password
-                or parsed.query or parsed.fragment):
-            raise ValueError("Expected a public HTTPS URL without credentials, query or fragment")
-    prefix = config["RELEASE_BASE_URL"].rstrip("/") + "/"
-    if not url.startswith(prefix):
-        raise ValueError("Runtime URL must belong to RELEASE_BASE_URL")
-    key = url[len(prefix):]
-    if any(part in ("", ".", "..") for part in key.split("/")) or "\\" in key:
-        raise ValueError("Invalid runtime object key")
-    options = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}
-    try:
-        subprocess.run(["aws", "s3api", "get-object", "--bucket", config["R2_BUCKET"], "--key", key,
-                        "--endpoint-url", config["R2_ENDPOINT"], "--region", "auto",
-                        "--cli-connect-timeout", "30", "--cli-read-timeout", "300", str(output)],
-                       check=True, timeout=600, **options)
-        if digest(output) != expected:
-            raise ValueError("Published runtime SHA-256 mismatch")
-    except Exception:
-        output.unlink(missing_ok=True)
-        raise
+    if not url.startswith("https://"):
+        raise ValueError("Runtime URL must use HTTPS")
+    request = urllib.request.Request(url, headers={"User-Agent": "mash-release/1.0"})
+    with urllib.request.urlopen(request, timeout=300) as response, output.open("wb") as file:
+        shutil.copyfileobj(response, file)
+    if digest(output) != expected:
+        output.unlink()
+        raise ValueError("Published runtime SHA-256 mismatch")
 
 
 def extract(archive_path: Path, destination: Path, root: str) -> Path:
@@ -109,8 +91,7 @@ def smoke(executable: Path, code: Path, models: Path, work: Path) -> None:
          "region": {"x": 0, "y": 0, "w": 1, "h": 1}},
         {"id": 4, "cmd": "quit"},
     ]
-    env = {key: value for key, value in os.environ.items()
-           if key not in ("PYTHONPATH", "PYTHONHOME") and not key.startswith(("AWS_", "R2_"))}
+    env = {key: value for key, value in os.environ.items() if key not in ("PYTHONPATH", "PYTHONHOME")}
     env.update(MASH_CV_CODE_DIR=str(code), MASH_CV_MODELS_DIR=str(models), PYTHONIOENCODING="gbk")
     wire = "".join(json.dumps(command, ensure_ascii=False) + "\n" for command in commands)
     options = {"creationflags": subprocess.CREATE_NO_WINDOW} if sys.platform == "win32" else {}

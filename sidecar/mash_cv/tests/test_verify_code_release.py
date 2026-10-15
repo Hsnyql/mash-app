@@ -97,15 +97,11 @@ def smoke_fixture(tmp_path):
 def test_smoke_uses_packaged_code_and_validates_unicode_io_and_ocr(release, tmp_path, monkeypatch):
     executable, code, models = smoke_fixture(tmp_path)
     monkeypatch.setenv("PYTHONPATH", "ambient-source")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "release-secret")
-    monkeypatch.setenv("R2_ENDPOINT", "https://account.r2.cloudflarestorage.com")
 
     def run(args, **kwargs):
         assert args == [str(executable)]
         assert kwargs["env"]["MASH_CV_CODE_DIR"] == str(code)
         assert "PYTHONPATH" not in kwargs["env"]
-        assert "AWS_SECRET_ACCESS_KEY" not in kwargs["env"]
-        assert "R2_ENDPOINT" not in kwargs["env"]
         commands = [json.loads(line) for line in kwargs["input"].decode("utf-8").splitlines()]
         assert "中文" in commands[1]["dir"]
         assert Path(commands[2]["imagePath"]).read_bytes().startswith(b"\x89PNG")
@@ -127,71 +123,29 @@ def test_smoke_fails_on_process_errors_or_missing_ocr_reply(release, tmp_path, m
         release.smoke(executable, code, models, tmp_path)
 
 
-@pytest.fixture
-def r2(monkeypatch):
-    monkeypatch.setenv("RELEASE_BASE_URL", "https://example.invalid/releases/")
-    monkeypatch.setenv("R2_ENDPOINT", "https://account.r2.cloudflarestorage.com")
-    monkeypatch.setenv("R2_BUCKET", "test-bucket")
-
-
-def test_download_uses_r2_api_and_verifies_runtime_hash(release, r2, tmp_path, monkeypatch):
+def test_download_uses_release_user_agent_and_verifies_runtime_hash(release, tmp_path, monkeypatch):
     source = tmp_path / "source.zip"
     source.write_bytes(b"published runtime")
 
-    def run(args, **kwargs):
-        assert args == ["aws", "s3api", "get-object", "--bucket", "test-bucket",
-                        "--key", "mash/runtime/runtime.zip", "--endpoint-url",
-                        "https://account.r2.cloudflarestorage.com", "--region", "auto",
-                        "--cli-connect-timeout", "30", "--cli-read-timeout", "300", str(output)]
-        assert kwargs["check"] is True
-        assert kwargs["timeout"] == 600
-        shutil.copyfile(source, args[-1])
+    def urlopen(request, **kwargs):
+        assert request.full_url == "https://example.invalid/runtime.zip"
+        assert request.get_header("User-agent") == "mash-release/1.0"
+        assert kwargs["timeout"] == 300
+        return source.open("rb")
 
-    monkeypatch.setattr(release.subprocess, "run", run)
+    monkeypatch.setattr(release.urllib.request, "urlopen", urlopen)
     output = tmp_path / "download.zip"
-    release.download("https://example.invalid/releases/mash/runtime/runtime.zip", output, release.digest(source))
+    release.download("https://example.invalid/runtime.zip", output, release.digest(source))
     assert output.read_bytes() == source.read_bytes()
 
 
-def test_download_rejects_incorrect_runtime_hash(release, r2, tmp_path, monkeypatch):
+def test_download_rejects_incorrect_runtime_hash(release, tmp_path, monkeypatch):
     source = tmp_path / "source.zip"
     source.write_bytes(b"wrong runtime")
-    monkeypatch.setattr(release.subprocess, "run", lambda args, **kwargs: shutil.copyfile(source, args[-1]))
+    monkeypatch.setattr(release.urllib.request, "urlopen", lambda *args, **kwargs: source.open("rb"))
     output = tmp_path / "download.zip"
     with pytest.raises(ValueError, match="SHA-256"):
-        release.download("https://example.invalid/releases/runtime.zip", output, "0" * 64)
-    assert not output.exists()
-
-
-@pytest.mark.parametrize("url", ["http://example.invalid/releases/runtime.zip",
-                                 "https://other.invalid/releases/runtime.zip",
-                                 "https://example.invalid/releases-other/runtime.zip",
-                                 "https://example.invalid/releases/../runtime.zip",
-                                 "https://example.invalid/releases/runtime.zip?query=1",
-                                 "https://example.invalid/releases/runtime.zip#fragment",
-                                 "https://example.invalid/releases/"])
-def test_download_rejects_urls_that_cannot_map_to_the_configured_bucket(release, r2, tmp_path, monkeypatch, url):
-    monkeypatch.setattr(release.subprocess, "run", lambda *args, **kwargs: pytest.fail("Must not call R2"))
-    with pytest.raises(ValueError):
-        release.download(url, tmp_path / "download.zip", "0" * 64)
-
-
-@pytest.mark.parametrize("name", ["RELEASE_BASE_URL", "R2_ENDPOINT", "R2_BUCKET"])
-def test_download_requires_r2_configuration(release, r2, tmp_path, monkeypatch, name):
-    monkeypatch.delenv(name)
-    with pytest.raises(ValueError, match=name):
-        release.download("https://example.invalid/releases/runtime.zip", tmp_path / "download.zip", "0" * 64)
-
-
-def test_download_cleans_up_partial_files_on_api_failure(release, r2, tmp_path, monkeypatch):
-    def run(args, **kwargs):
-        Path(args[-1]).write_bytes(b"partial runtime")
-        raise release.subprocess.CalledProcessError(1, args)
-
-    monkeypatch.setattr(release.subprocess, "run", run)
-    output = tmp_path / "download.zip"
-    with pytest.raises(release.subprocess.CalledProcessError):
-        release.download("https://example.invalid/releases/runtime.zip", output, "0" * 64)
+        release.download("https://example.invalid/runtime.zip", output, "0" * 64)
     assert not output.exists()
 
 
