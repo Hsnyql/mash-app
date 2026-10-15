@@ -1,156 +1,151 @@
-# mash
+# Mash
 
-An automation tool for FGO (Fate/Grand Order). Connects to an Android device or emulator via ADB and automates party setup, support selection, and more.
+**Mash** 是一款基于 Tauri 构建的开源跨平台《Fate/Grand Order》（FGO）自动化工具。
 
-## Tech Stack
+通过 ADB 连接 Android 模拟器，结合图像识别与自动化操作，实现队伍配置、助战选择、自动战斗等功能。
 
-| Layer            | Technology                                 |
-| ---------------- | ------------------------------------------ |
-| Desktop runtime  | Tauri 2 (Rust)                             |
-| Frontend         | React 18 + TypeScript + Vite 6             |
-| UI components    | Radix UI Themes                            |
-| Image recognition| Python sidecar (OpenCV template matching)  |
-| Device control   | ADB (Android Debug Bridge)                 |
-| Package manager  | pnpm                                       |
+## 功能特性
 
-## Project Structure
+- **自动战斗** — 根据预设策略自动执行战斗操作，包括技能释放、宝具使用和指令卡选择。
+- **队伍配置** — 管理队伍、从者及相关战斗配置。
+- **助战选择** — 根据指定条件自动识别并选择助战从者。
+- **战斗策略** — 支持基于回合、战斗阶段及其他条件的自定义战斗规则。
+- **搓丸子** — 自动执行概念礼装强化流程。
 
-```
-src/                         # React frontend
-  App.tsx                    # Top-level routing and cross-feature orchestration
-  components/common/        # Shared UI primitives used by multiple features
-  features/                  # Feature-owned pages, components, helpers, and tests
-  styles/                    # Global and feature-oriented CSS
-  test/                      # Shared Vitest/RTL setup and render helpers
-  types/                     # Shared TypeScript interfaces for backend DTOs
-src-tauri/                   # Tauri / Rust backend
-  src/
-    main.rs                  # Thin entry, calls mash_lib::run()
-    lib.rs                   # Tauri command registration & plugin wiring
-    commands/                # Tauri commands grouped by domain
-      automation/            # Battle, enhancement, CE, and friend-point lifecycle commands
-      catalog/               # Servant/CE catalogs, portraits, mystic codes, and skill helpers
-      debug/                 # Capture/session and battle, NP, support, enhancement diagnostics
-      assets/                # Managed asset download/install helpers
-      projects/              # Project persistence and configuration transfer
-      runtime/               # External mash-cv archive and resource helpers
-    adb.rs                   # ADB device connection, tap, swipe
-    screen.rs, screen/       # Sidecar client, protocol, DTOs, and operation groups
-      operations/            # Battle, support, enhancement, and template-matching IPC
-    runner/                  # Battle state machine and domain handlers
-      actions/               # Skill execution helpers
-      attack/                # Card selection, NP recognition, conditions, and runtime flows
-      grand/                 # Grand-class strategy implementations and shared rules
-      party/                 # Lineup mutation, action resolution, replay, and runtime identity
-      support/               # Support selection policy and runtime flow
-    enhancement_runner/      # Servant-enhancement runtime helpers
-    craft_essence_enhancement_runner/ # CE enhancement policy/material/runtime helpers
-    touch/                   # Low-level, jittered device input abstraction
-    resources/               # Embedded catalog JSON consumed with include_str!
-  resources/
-    runtime-manifest.json    # Required mash-cv base/code versions + artifact metadata
-    servers/                 # JP/CN/shared CV configs and PNG templates
-    scrcpy/scrcpy-server.jar # Pushed to device for realtime H.264 streaming
-sidecar/                     # Python image recognition process (Poetry-managed)
-  mash_cv/
-    mash_cv/                 # Package source
-      cv.py                  # JSON-line REPL, template matching, turn-number OCR
-      stream.py              # scrcpy client (PyAV H.264 decoder)
-      region_tool.py         # CLI helper for extracting template regions
-    tests/                   # pytest suite (+ sample screenshots & templates)
-    build_sidecar.py         # Shared native PyInstaller builder
-    pyproject.toml           # Poetry dependencies
-```
+## 下载与安装
 
-See [docs/module-structure.md](docs/module-structure.md) for module ownership and placement rules.
+前往 [官网]([../../releases](https://docs.mash.xiaotongx.com/start/install/)) 下载适用于当前操作系统的最新版本。
 
-## Prerequisites
+### 系统要求
 
-- [Node.js](https://nodejs.org/) (LTS)
-- [Rust](https://www.rust-lang.org/tools/install) (stable)
+- Windows 或 macOS (M 系列芯片)
+- Android 模拟器
+- ADB（Android Debug Bridge）
+
+Mash 通过 ADB 与游戏设备通信，因此需要确保模拟器已开启 ADB 连接。
+
+### 首次使用
+
+1. 下载并安装 Mash。
+2. 启动 Android 设备或模拟器，并运行 FGO。
+3. 在 Mash 中连接设备并完成相关配置。
+4. 配置自动化任务并开始运行。
+
+Mash 的图像识别功能依赖独立的 CV  运行时。首次运行时，如果缺少所需组件，应用会提示安装。
+
+## 技术架构
+
+Mash 采用前后端分离的桌面应用架构，主要由以下部分组成：
+
+| 模块 | 技术 | 职责 |
+|------|------|------|
+| 桌面应用 | Tauri 2 / Rust | 应用生命周期、设备通信与自动化执行 |
+| 用户界面 | React / TypeScript / Vite | 配置管理与运行状态展示 |
+| UI 组件 | Radix UI Themes | 基础界面组件 |
+| 图像识别 | Python / OpenCV | 游戏画面识别与目标定位 |
+| 视频采集 | scrcpy / PyAV | 实时获取并解码设备画面 |
+| 设备控制 | ADB | 执行点击、滑动等操作 |
+
+### 工作原理
+
+Mash 通过以下流程完成自动化操作：
+
+1. **设备连接**：使用 ADB 连接 Android 设备或模拟器。
+2. **画面采集**：通过 scrcpy 获取实时画面，并使用 PyAV 解码。
+3. **图像识别**：使用 OpenCV 模板匹配及 OCR 识别当前游戏状态。
+4. **决策执行**：Rust 自动化引擎根据当前状态及用户配置决定下一步操作。
+5. **设备操作**：通过 ADB 执行点击、滑动等操作。
+6. **状态反馈**：将执行状态同步至前端界面。
+
+自动化逻辑由 Rust 状态机驱动，图像识别则由独立的 Python 进程完成。
+
+### CV 运行时
+
+为了减小应用安装包及后续更新的体积，Mash 将图像识别运行时与主程序分开分发。
+
+CV 组件由两部分组成：
+
+- **Runtime**：包含 Python 运行环境、原生依赖、OCR 模型等。
+- **Code**：包含图像识别相关的 Python 代码。
+
+两者独立进行版本管理，使 Python 代码更新不必重新分发完整的运行环境。
+
+详细信息请参阅 [分发与更新文档](docs/distribution.md)。
+
+## 开发指南
+
+### 环境要求
+
+开发 Mash 需要以下工具：
+
+- [Node.js](https://nodejs.org/)（LTS）
 - [pnpm](https://pnpm.io/)
-- [ADB](https://developer.android.com/tools/adb) (must be on PATH)
-- Python 3 + [Poetry](https://python-poetry.org/) (only needed to build the sidecar)
+- [Rust](https://www.rust-lang.org/tools/install)（stable）
+- [ADB](https://developer.android.com/tools/adb)
 
-## Development
+如果需要开发或构建图像识别组件，还需要：
+
+- Python 3
+- [Poetry](https://python-poetry.org/)
+
+### 本地开发
+
+克隆仓库：
 
 ```bash
-# Install frontend dependencies
+git clone <repository-url>
+cd mash
+```
+
+安装依赖：
+
+```bash
 pnpm install
+```
 
-# Start dev mode (Vite + Rust hot reload)
+启动 Tauri 开发环境：
+
+```bash
 pnpm tauri dev
+```
 
-# Frontend-only dev server (no Tauri shell)
+仅启动前端开发服务器：
+
+```bash
 pnpm dev
-
-# Lint
-pnpm lint
 ```
 
-### CV Runtime
+### 构建应用
 
-The automation runtime depends on the `mash-cv` sidecar for screen recognition and the scrcpy H.264 stream. `mash-cv` is **not** bundled into the Tauri app. The main app ships only the UI/Rust/resources bundle and reads `src-tauri/resources/runtime-manifest.json` to decide which external CV packages are required.
-
-```text
-app_data_dir()/runtime/mash-cv/runtime/<runtimeVersion>/mash-cv-runtime/
-app_data_dir()/runtime/mash-cv/code/<codeVersion>/mash-cv-code/
+```bash
+pnpm tauri build
 ```
 
-The runtime base contains the heavy PyInstaller/native dependency tree and OCR models. The code package contains the lightweight `mash_cv/*.py` source. If either artifact is missing or stale, the app shows a CV package install button near the automation entry points.
+图像识别组件需要单独构建。
 
-Version numbers are managed in `versions.toml` and use `x.x.x` format. Distribution details, R2 object layout, tag conventions, and release troubleshooting are documented in [docs/distribution.md](docs/distribution.md).
-
-Build local sidecar artifacts for testing:
+macOS：
 
 ```bash
 bash scripts/macos/build-cv.sh
 ```
 
-Release entry points:
-
-```bash
-# Full release orchestration (read-only plan by default)
-mise exec -- scripts/macos/release.sh 0.2.2
-
-# Execute the planned release; add --dmg and --push when wanted
-mise exec -- scripts/macos/release.sh 0.2.2 --publish
-
-# App updater release: bump versions, commit, and tag vX.Y.Z
-scripts/macos/bump-app-version.sh 0.2.2
-
-# CV code release: bump and create the tag
-scripts/macos/bump-cv-code-version.sh 0.2.2
-git push origin cv-code/0.2.2
-
-# CV code release from the local machine
-R2_ENDPOINT=... R2_BUCKET=... RELEASE_BASE_URL=... scripts/macos/release-cv-code.sh 0.2.2
-
-# CV runtime release: build, upload to R2, update manifest, commit, and tag
-R2_ENDPOINT=... R2_BUCKET=... RELEASE_BASE_URL=... scripts/macos/release-cv-runtime.sh 0.2.2
-```
-
-Scripts are grouped under `scripts/macos/` (Bash), `scripts/windows/`
-(PowerShell), and `scripts/shared/` (portable Node helpers). Run platform entry
-points resolve the repository root themselves; macOS icon generation accepts an
-explicit project root and source image.
-
-Windows equivalents run natively without Git Bash or WSL:
+Windows：
 
 ```powershell
 ./scripts/windows/build-cv.ps1
-pnpm build:windows -Unsigned
-# Read-only plan; add -Publish to execute, -Installer for direct downloads,
-# and -Push to push release commits and tags.
-pnpm release:windows 0.16.0 -CvCode 0.4.27 -CvRuntime 0.3.0 -Installer
 ```
 
-See [Windows release instructions](docs/windows.md) for each individual entry
-point and [distribution details](docs/distribution.md) for R2 paths and signing.
+有关 Windows 构建环境、安装包及签名的详细说明，请参阅 [Windows 构建文档](docs/windows.md)。
 
-Running the sidecar as PyInstaller `--onedir` avoids re-extracting dylibs on every launch, cutting warm-start time to well under a second after the runtime is installed.
+### 测试
 
-Run the sidecar tests (no Rust/Node required):
+前端代码检查：
+
+```bash
+pnpm lint
+```
+
+运行 Python 图像识别测试：
 
 ```bash
 cd sidecar/mash_cv
@@ -158,29 +153,55 @@ poetry install
 poetry run pytest
 ```
 
-## Production Build
+## 项目结构
 
-Windows x64 prerequisites, native CV builds, NSIS installers, and updater
-publishing are documented in [docs/windows.md](docs/windows.md).
-
-```bash
-pnpm tauri build
+```text
+mash/
+├── src/                # React 前端
+│   ├── components/     # 通用 UI 组件
+│   ├── features/       # 功能模块
+│   ├── styles/         # 样式
+│   └── types/          # 类型定义
+│
+├── src-tauri/          # Tauri / Rust 后端
+│   ├── src/
+│   │   ├── commands/   # Tauri 命令
+│   │   ├── runner/     # 自动战斗引擎
+│   │   ├── screen/     # 图像识别通信
+│   │   ├── touch/      # 设备输入控制
+│   │   └── adb.rs      # ADB 通信
+│   └── resources/      # 应用资源与运行时配置
+│
+├── sidecar/            # Python 图像识别组件
+├── scripts/            # 构建与发布脚本
+├── docs/               # 项目文档
+└── versions.toml       # 组件版本配置
 ```
 
-The Tauri bundle intentionally excludes `mash-cv`; app updates remain small. Bump the shared `mashCvCodeVersion` for Python-only sidecar changes. Each platform has an independent `runtimeVersion`; bump only the affected platform when OCR models, PyInstaller dependencies, native dependencies, or the runtime launcher/archive layout changes. See [docs/distribution.md](docs/distribution.md) for the release flow.
+模块划分与代码组织规范请参阅 [模块结构文档](docs/module-structure.md)。
 
-## How It Works
+## 贡献
 
-1. Connects to an Android device or BlueStacks emulator via ADB
-2. The `mash-cv` sidecar pushes `scrcpy-server.jar` to the device and opens a realtime H.264 stream, decoding frames with PyAV
-3. The Rust runner drives a state machine that asks the sidecar to identify the current screen (team confirm, support select, battle, …) and find UI elements via config-driven OpenCV template matching
-4. Support selection OCR uses servant metadata localized for the active server. For CN, `name_cn_server` in `servants.json` is preferred over `name_cn` when present, so renamed in-game servant/NP text is matched first.
-5. During battle, the sidecar also OCRs the turn number (anchor-bounded digit template matching) so the runner can schedule skills turn-by-turn
-6. Based on the detected screen, the runner issues tap/swipe commands over ADB
-7. The frontend displays real-time automation status and allows stopping at any time
+欢迎通过 Issue 和 Pull Request 参与 Mash 的开发。
 
-## License
+如果你发现了 Bug、希望提出功能建议，或者有意改进代码与文档，都可以通过 GitHub 参与讨论。
 
-Mash's original source code and documentation are licensed under the [MIT License](LICENSE).
-Bundled third-party software, OCR models, dependencies, and game-derived assets remain subject
-to their own terms. See [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for details.
+提交 Pull Request 前，建议先阅读项目文档，了解现有模块划分与代码组织方式。
+
+对于较大规模的功能改动，建议先创建 Issue 讨论实现方案。
+
+## 许可证
+
+Mash 的原创源代码及文档采用 [MIT License](LICENSE) 开源。
+
+项目使用的第三方软件、OCR 模型、依赖项及游戏相关资源可能适用不同的许可证或使用条款。
+
+详情请参阅 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES)。
+
+## 免责声明
+
+Mash 是一个非官方的开源项目，与《Fate/Grand Order》的开发商、发行商及相关权利方不存在关联或合作关系。
+
+本项目仅用于技术研究、学习与交流。
+
+使用者应自行了解并遵守游戏服务条款。使用自动化工具可能存在账号限制或其他风险，相关责任由使用者自行承担。
