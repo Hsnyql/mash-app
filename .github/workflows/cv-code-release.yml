@@ -115,6 +115,7 @@ jobs:
   compatibility:
     name: Published runtime compatibility (${{ matrix.platform }})
     needs: [plan, build]
+    environment: cv-code-release
     strategy:
       fail-fast: false
       matrix:
@@ -157,9 +158,16 @@ jobs:
       - name: Source CV tests
         working-directory: source/sidecar/mash_cv
         run: poetry run pytest --ignore=tests/test_windows_runtime.py
-      - name: Download the pinned runtime and exercise the packaged code
+      - name: Download the pinned runtime via R2 API and exercise the packaged code
         env:
           TARGET_PLATFORM: ${{ matrix.platform }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          R2_BUCKET: ${{ vars.R2_BUCKET || 'mash' }}
         run: |
           python tooling/sidecar/mash_cv/verify_code_release.py candidate/release.json \
             --dist source/sidecar/mash_cv/dist --report "reports/$TARGET_PLATFORM.json"
@@ -206,7 +214,7 @@ jobs:
           pattern: cv-code-tested-*
           path: reports
           merge-multiple: true
-      - name: Upload immutable artifacts and verify full CDN downloads
+      - name: Upload immutable artifacts and verify R2 API downloads
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
