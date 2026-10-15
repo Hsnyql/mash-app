@@ -8,7 +8,6 @@ const DEFAULT_DEBUG_SETTINGS: DebugSettings = {
   sequenceRecognitionDebugMode: "disabled",
   autoCaptureBattleBeforeAttack: false,
   autoCaptureBattleResultLoot: false,
-  autoCaptureUnknownScreenTimeout: false,
   autoCaptureSkillUseProbe: false,
   autoCaptureUnrecognizedCriticalChance: false,
   simulateStuckAttackSelection: false,
@@ -30,7 +29,6 @@ function normalizeDebugSettings(settings: Partial<DebugSettings>): DebugSettings
     sequenceRecognitionDebugMode,
     autoCaptureBattleBeforeAttack: settings.autoCaptureBattleBeforeAttack === true,
     autoCaptureBattleResultLoot: settings.autoCaptureBattleResultLoot === true,
-    autoCaptureUnknownScreenTimeout: settings.autoCaptureUnknownScreenTimeout === true,
     autoCaptureSkillUseProbe: settings.autoCaptureSkillUseProbe === true,
     autoCaptureUnrecognizedCriticalChance:
       settings.autoCaptureUnrecognizedCriticalChance === true,
@@ -129,23 +127,6 @@ export function SettingsDebugPage({ active }: { active: boolean }) {
     try {
       const next = normalizeDebugSettings(
         await invoke<DebugSettings>("set_auto_capture_battle_before_attack", { value })
-      );
-      setSettings(next);
-      setSavedMessage("已保存");
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setSaving(false);
-    }
-  }, []);
-
-  const saveAutoCaptureUnknownScreenTimeout = useCallback(async (value: boolean) => {
-    setSaving(true);
-    setError(null);
-    setSavedMessage(null);
-    try {
-      const next = normalizeDebugSettings(
-        await invoke<DebugSettings>("set_auto_capture_unknown_screen_timeout", { value })
       );
       setSettings(next);
       setSavedMessage("已保存");
@@ -292,24 +273,6 @@ export function SettingsDebugPage({ active }: { active: boolean }) {
             onCheckedChange={(value) => void saveAutoCaptureBattleResultLoot(value)}
             disabled={loading || saving}
             aria-label="自动截图战利品页面"
-          />
-        </Flex>
-
-        <Flex align="start" justify="between" gap="4" wrap="wrap" className="basic-setting-row">
-          <Flex direction="column" gap="1" className="basic-setting-copy">
-            <Text size="2" weight="bold">
-              无法识别画面超时时截图
-            </Text>
-            <Text size="1" color="gray">
-              开启后自动化因无法识别当前画面超时停止时，会保存当前画面截图用于排查模板或弹窗问题。
-            </Text>
-          </Flex>
-
-          <Switch
-            checked={settings.autoCaptureUnknownScreenTimeout}
-            onCheckedChange={(value) => void saveAutoCaptureUnknownScreenTimeout(value)}
-            disabled={loading || saving}
-            aria-label="无法识别画面超时时截图"
           />
         </Flex>
 

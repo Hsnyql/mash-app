@@ -73,6 +73,7 @@ impl Runner {
             let s = self.state.lock().unwrap();
             (format!("{:?}", *s), s.status())
         };
+        crate::recognition_diagnostics::logs::record(&self.app_handle, screen, message);
         let _ = self.app_handle.emit(
             "automation-status",
             AutomationEvent {

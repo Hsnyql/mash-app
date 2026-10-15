@@ -28,6 +28,7 @@ def _clear_state():
     _cv_module._servant_catalog_cache = None
     _cv_module.static_template_keys.clear()
     _cv_module.template_dirs.clear()
+    _cv_module._template_source_paths.clear()
     _cv_module.templates_dir = None
     yield
     mash_cv.templates.clear()
@@ -38,6 +39,7 @@ def _clear_state():
     _cv_module._servant_catalog_cache = None
     _cv_module.static_template_keys.clear()
     _cv_module.template_dirs.clear()
+    _cv_module._template_source_paths.clear()
     _cv_module.templates_dir = None
     _cv_module._release_ocr()
     _cv_module._current_server = "JP"
@@ -5904,7 +5906,7 @@ class TestREPL:
         assert responses[0]["errorCode"] == "template_load_failed"
         assert responses[0]["templateKey"]
         assert "rows" not in responses[0]
-        assert responses[1] == {"id": 4, "ok": True}
+        assert responses[1] == {"id": 4, "ok": True, "recognitionDiagnosticsVersion": 1}
 
     def test_unknown_command(self):
         responses = self._run([{"cmd": "nope"}, {"cmd": "quit"}])
@@ -5930,7 +5932,7 @@ class TestREPL:
             timeout=10,
         )
         lines = [l for l in proc.stdout.strip().splitlines() if l]
-        assert json.loads(lines[0]) == {"ok": True}
+        assert json.loads(lines[0]) == {"ok": True, "recognitionDiagnosticsVersion": 1}
         assert json.loads(lines[-1]) == {"avLoaded": False}
 
     def test_set_server_cn_round_trip(self):
@@ -5954,7 +5956,7 @@ class TestREPL:
         # field exists so the test stays focused on the protocol.
         assert "ocrReset" in responses[0]
         assert responses[1]["server"] == "JP"
-        assert responses[2] == {"ok": True}
+        assert responses[2] == {"ok": True, "recognitionDiagnosticsVersion": 1}
 
     def test_release_ocr_is_idempotent(self):
         responses = self._run([

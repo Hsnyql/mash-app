@@ -90,6 +90,21 @@ pub(crate) fn battle_before_attack_screenshot_filename(
 }
 
 impl Runner {
+    pub(crate) fn save_recognition_failure(&mut self, message: &str) {
+        let app = self.app_handle.clone();
+        let serial = self.diagnostic_adb.serial().map(str::to_string);
+        let device = self.diagnostic_adb.diagnostic_device_info();
+        self.sidecar().recognition_device = device;
+        if let Err(error) = crate::recognition_diagnostics::save_failure(
+            &app,
+            self.sidecar(),
+            message,
+            serial.as_deref(),
+        ) {
+            self.emit_warn("Unknown", &format!("识别诊断保存失败: {error}"));
+        }
+    }
+
     pub(crate) fn emit_np_recognition_diagnostics(&self, screen: &str, nps: &[NoblePhantasmMatch]) {
         if let Some(message) = format_shadow_battle_model_digits(nps) {
             self.emit(screen, &message);

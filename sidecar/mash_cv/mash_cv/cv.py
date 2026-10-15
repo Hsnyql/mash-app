@@ -104,6 +104,7 @@ from mash_cv.digit_regions import (
     DEFAULT_NP_GAUGE_DIGIT_REGIONS,
     DEFAULT_NP_GAUGE_DIGIT_SLOT_REGIONS,
 )
+from mash_cv.recognition_diagnostics import RecognitionDiagnostics, begin_candidate, record_match
 from mash_cv.sequence_classifier import SequencePrediction, get_sequence_classifier
 
 if TYPE_CHECKING:
@@ -113,6 +114,8 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
+
+recognition_diagnostics = RecognitionDiagnostics()
 
 templates: dict[str, np.ndarray] = {}
 # Per-template alpha mask. Only populated for templates whose source PNG has a
@@ -127,6 +130,9 @@ static_template_keys: set[str] = set()
 # to re-read RGBA icons with their alpha mask preserved.
 templates_dir: Optional[str] = None
 template_dirs: list[str] = []
+# Exact source for each loaded key, including keyPrefix namespaces. Diagnostic
+# export must use the loader's mapping rather than rebuilding a path from a key.
+_template_source_paths: dict[str, str] = {}
 config: dict = {"screens": {}}
 _servant_catalog_cache: Optional[list[dict]] = None
 # Populated once start_stream succeeds. The stream module is imported lazily
@@ -754,11 +760,17 @@ def _match_template_region(
     template_reference_width: Optional[float] = None,
 ) -> dict:
     """Find template region and return a normalized box."""
+    original_size = {"w": tmpl.shape[1], "h": tmpl.shape[0]}
     if len(tmpl.shape) == 3:
         tmpl = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
     tmpl = _scale_static_template_for_image(
         tmpl, img, template_key, template_reference_width
     )
+
+    def finish(result):
+        return record_match(result, template_key, original_size,
+                            {"w": tmpl.shape[1], "h": tmpl.shape[0]}, region,
+                            threshold, _effective_template_reference_width(template_key, template_reference_width))
 
     h, w = img.shape[:2]
     rx = int(region["x"] * w)
@@ -768,35 +780,33 @@ def _match_template_region(
 
     roi = img[ry : ry + rh, rx : rx + rw]
     if roi.size == 0:
-        return {"found": False, "score": 0.0}
+        return finish({"found": False, "score": 0.0, "failReason": "empty_search_region"})
 
     gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     th, tw = tmpl.shape[:2]
     if tw > gray_roi.shape[1] or th > gray_roi.shape[0]:
-        return {"found": False, "score": 0.0}
+        return finish({"found": False, "score": 0.0, "failReason": "template_larger_than_region"})
 
     result = cv2.matchTemplate(gray_roi, tmpl, cv2.TM_CCOEFF_NORMED)
     _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
     score = float(max_val)
-    if score >= threshold:
-        left = rx + max_loc[0]
-        top = ry + max_loc[1]
-        cx = left + tw // 2
-        cy = top + th // 2
-        return {
-            "found": True,
-            "x": cx / w,
-            "y": cy / h,
-            "score": score,
-            "region": {
-                "x": left / w,
-                "y": top / h,
-                "w": tw / w,
-                "h": th / h,
-            },
-        }
-    return {"found": False, "score": score}
+    left = rx + max_loc[0]
+    top = ry + max_loc[1]
+    cx = left + tw // 2
+    cy = top + th // 2
+    return finish({
+        "found": score >= threshold,
+        "x": cx / w,
+        "y": cy / h,
+        "score": score,
+        "region": {
+            "x": left / w,
+            "y": top / h,
+            "w": tw / w,
+            "h": th / h,
+        },
+    })
 
 
 def _score_template_region(
@@ -809,6 +819,7 @@ def _score_template_region(
     template_reference_width: Optional[float] = None,
 ) -> dict:
     """Find the best template location and always return its normalized box."""
+    original_size = {"w": tmpl.shape[1], "h": tmpl.shape[0]}
     if len(tmpl.shape) == 3:
         tmpl = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
     tmpl = _scale_static_template_for_image(
@@ -835,6 +846,11 @@ def _score_template_region(
         if mask is not None:
             mask = cv2.resize(mask, (scaled_w, scaled_h), interpolation=interpolation)
 
+    def finish(result):
+        return record_match(result, template_key, original_size,
+                            {"w": tmpl.shape[1], "h": tmpl.shape[0]}, region,
+                            threshold, _effective_template_reference_width(template_key, template_reference_width), mask is not None)
+
     h, w = img.shape[:2]
     rx = max(0, int(round(region["x"] * w)))
     ry = max(0, int(round(region["y"] * h)))
@@ -843,12 +859,12 @@ def _score_template_region(
 
     roi = img[ry : ry + rh, rx : rx + rw]
     if roi.size == 0:
-        return {"found": False, "score": 0.0, "region": None, "x": 0.0, "y": 0.0}
+        return finish({"found": False, "score": 0.0, "region": None, "x": 0.0, "y": 0.0, "failReason": "empty_search_region"})
 
     gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     th, tw = tmpl.shape[:2]
     if tw > gray_roi.shape[1] or th > gray_roi.shape[0]:
-        return {"found": False, "score": 0.0, "region": None, "x": 0.0, "y": 0.0}
+        return finish({"found": False, "score": 0.0, "region": None, "x": 0.0, "y": 0.0, "failReason": "template_larger_than_region"})
 
     if mask is not None:
         result = cv2.matchTemplate(
@@ -865,7 +881,7 @@ def _score_template_region(
     score = float(max_val)
     left = rx + max_loc[0]
     top = ry + max_loc[1]
-    return {
+    return finish({
         "found": score >= threshold,
         "x": (left + tw / 2.0) / w,
         "y": (top + th / 2.0) / h,
@@ -876,7 +892,7 @@ def _score_template_region(
             "w": tw / w,
             "h": th / h,
         },
-    }
+    })
 
 
 def _crop_template(tmpl: np.ndarray, crop: dict | None) -> np.ndarray:
@@ -903,6 +919,23 @@ def _resize_template(tmpl: np.ndarray, size: dict | None) -> np.ndarray:
     return cv2.resize(tmpl, (width, height), interpolation=interpolation)
 
 
+def _effective_template_reference_width(template_key, template_reference_width=None):
+    if not template_key or template_key not in static_template_keys:
+        return None
+    reference_width = template_reference_width
+    if reference_width is None or reference_width <= 0:
+        reference_width = (
+            BATTLE_SPEED_TEMPLATE_REFERENCE_WIDTH
+            if template_key in BATTLE_SPEED_TEMPLATE_KEYS
+            else (
+                COMMAND_CARD_STATUS_TEMPLATE_REFERENCE_WIDTH
+                if template_key in COMMAND_CARD_STATUS_TEMPLATE_SCALES
+                else STATIC_TEMPLATE_REFERENCE_WIDTH
+            )
+        )
+    return reference_width
+
+
 def _scale_static_template_for_image(
     tmpl: np.ndarray,
     img: np.ndarray,
@@ -915,17 +948,7 @@ def _scale_static_template_for_image(
     frame_w = int(img.shape[1])
     if frame_w <= 0:
         return tmpl
-    reference_width = template_reference_width
-    if reference_width is None or reference_width <= 0:
-        reference_width = (
-            BATTLE_SPEED_TEMPLATE_REFERENCE_WIDTH
-            if template_key in BATTLE_SPEED_TEMPLATE_KEYS
-            else (
-                COMMAND_CARD_STATUS_TEMPLATE_REFERENCE_WIDTH
-                if template_key in COMMAND_CARD_STATUS_TEMPLATE_SCALES
-                else STATIC_TEMPLATE_REFERENCE_WIDTH
-            )
-        )
+    reference_width = _effective_template_reference_width(template_key, template_reference_width)
     scale = frame_w / float(reference_width)
     if abs(scale - 1.0) < 0.02:
         return tmpl
@@ -953,6 +976,11 @@ def _template_path_for_key(template_key: str) -> Optional[str]:
         if os.path.isfile(full):
             return full
     return None
+
+
+def _template_source_path_for_key(template_key: str) -> Optional[str]:
+    """Locate diagnostic source files without confusing logical keys with paths."""
+    return _template_source_paths.get(template_key) or _template_path_for_key(template_key)
 
 
 def _template_load_error(
@@ -1004,6 +1032,7 @@ def _get_template(template_key: str) -> np.ndarray:
     if path is None:
         raise TemplateLoadError(template_key)
     gray, mask = _read_template_png(path, template_key)
+    _template_source_paths[template_key] = path
     templates[template_key] = gray
     if mask is not None:
         template_masks[template_key] = mask
@@ -2092,6 +2121,7 @@ def _detect_screen(
         det = spec.get("detect")
         if not det:
             continue
+        begin_candidate(screen_name, det)
         threshold = float(det.get("threshold", 0.85))
         region = det.get("region", DEFAULT_REGION)
         template_options = det.get("templateOptions")
@@ -6810,6 +6840,7 @@ def _load_templates(directory: str, append: bool = False, key_prefix: str = "") 
         template_masks.clear()
         static_template_keys.clear()
         template_dirs.clear()
+        _template_source_paths.clear()
         _icon_color_sig.clear()
     count = 0
     if not os.path.isdir(directory):
@@ -6823,6 +6854,7 @@ def _load_templates(directory: str, append: bool = False, key_prefix: str = "") 
             relative = os.path.relpath(path, directory).replace(os.sep, "/")
             key = f"{key_prefix}{os.path.splitext(relative)[0]}"
             gray, mask = _read_template_png(path, key)
+            _template_source_paths[key] = path
             templates[key] = gray
             if mask is not None:
                 template_masks[key] = mask
@@ -7007,6 +7039,7 @@ def _start_stream(cmd: dict) -> dict:
 
 def _stop_stream() -> dict:
     global stream
+    recognition_diagnostics.reset()
     if stream is None:
         return {"ok": True, "running": False}
     try:
@@ -7155,7 +7188,12 @@ def _main_repl() -> None:
                         pass
                 break
             elif action == "ping":
+                _reply(req_id, {"ok": True, "recognitionDiagnosticsVersion": 1})
+            elif action == "configure_recognition_diagnostics":
+                recognition_diagnostics.reset(int(cmd.get("timeoutCount", 100)))
                 _reply(req_id, {"ok": True})
+            elif action == "get_recognition_diagnostics":
+                _reply(req_id, recognition_diagnostics.export(config, _template_source_path_for_key))
             elif action == "load_templates":
                 _reply(
                     req_id,
@@ -7183,12 +7221,20 @@ def _main_repl() -> None:
                 _reply(req_id, _get_frame(cmd))
             elif action == "detect":
                 img, err = _load_frame(cmd)
+                metadata = None
+                if img is not None and cmd.get("diagnostics"):
+                    if not cmd.get("imagePath") and stream is not None:
+                        img, metadata = stream.get_latest_snapshot()
+                    else:
+                        metadata = {"source": "image", "width": img.shape[1], "height": img.shape[0]}
                 if img is None:
-                    _reply(req_id, {"screen": "Unknown", "score": 0.0, "error": err})
+                    if cmd.get("diagnostics"):
+                        recognition_diagnostics.no_frame(err or "frame unavailable")
+                    _reply(req_id, {"screen": "Unknown", "score": 0.0, "error": err or "frame unavailable"})
+                elif cmd.get("diagnostics"):
+                    _reply(req_id, recognition_diagnostics.detect(img, metadata, _detect_screen, cmd.get("screenNames")))
                 else:
-                    _reply(req_id, _detect_screen(
-                        img, cmd.get("screenNames")
-                    ))
+                    _reply(req_id, _detect_screen(img, cmd.get("screenNames")))
             elif action == "find_element":
                 img, err = _load_frame(cmd)
                 if img is None:

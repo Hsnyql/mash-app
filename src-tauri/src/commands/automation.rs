@@ -179,6 +179,7 @@ fn emit_automation_status_with_level(
         let s = state.lock().unwrap();
         (format!("{:?}", *s), s.status())
     };
+    crate::recognition_diagnostics::logs::record(app, screen, message);
     let _ = app.emit(
         "automation-status",
         AutomationEvent {
@@ -357,7 +358,6 @@ fn start_automation_with_config(
     config.auto_capture_battle_before_attack = debug_settings.auto_capture_battle_before_attack;
     config.auto_capture_battle_result_loot = debug_settings.auto_capture_battle_result_loot;
     config.auto_friend_request = recognition_settings.auto_friend_request;
-    config.auto_capture_unknown_screen_timeout = debug_settings.auto_capture_unknown_screen_timeout;
     config.auto_capture_skill_use_probe = debug_settings.auto_capture_skill_use_probe;
     config.auto_capture_unrecognized_critical_chance =
         debug_settings.auto_capture_unrecognized_critical_chance;
@@ -398,6 +398,7 @@ fn start_automation_with_config(
             recorder: run_recorder.clone(),
             state: state.clone(),
         };
+        crate::recognition_diagnostics::logs::begin(&app);
         emit_automation_status(&app, &state, "", "正在连接 ADB…");
         let mut adb_dev = adb::Adb::new(&app, selected_adb_serial);
         if let Err(err) = adb_dev.connect() {

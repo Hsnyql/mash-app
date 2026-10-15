@@ -69,6 +69,27 @@ impl Adb {
         &self.adb_path
     }
 
+    /// Small, bounded property reads used only after recognition has failed.
+    pub(crate) fn diagnostic_device_info(&self) -> serde_json::Value {
+        let property = |name: &str| -> Option<String> {
+            let mut command = adb_command(&self.adb_path);
+            command
+                .args(self.base_args())
+                .args(["shell", "getprop", name]);
+            let output = crate::platform::output_with_timeout(
+                &mut command,
+                std::time::Duration::from_secs(2),
+            )
+            .ok()?;
+            output
+                .status
+                .success()
+                .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        };
+        serde_json::json!({"model": property("ro.product.model"),
+                          "androidVersion": property("ro.build.version.release")})
+    }
+
     fn base_args(&self) -> Vec<String> {
         match &self.device {
             Some(d) => vec!["-s".into(), d.clone()],

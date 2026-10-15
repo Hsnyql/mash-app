@@ -11,10 +11,7 @@ struct OperationDebugEvent {
 /// Forward technical diagnostics to the status-bar operation log. The
 /// frontend keeps these entries hidden until the user enables “显示调试”.
 pub(crate) fn emit_debug(app: &tauri::AppHandle, message: impl Into<String>) {
-    let _ = app.emit(
-        DEBUG_EVENT_NAME,
-        OperationDebugEvent {
-            message: message.into(),
-        },
-    );
+    let message = message.into();
+    crate::recognition_diagnostics::logs::record(app, "sidecar", &message);
+    let _ = app.emit(DEBUG_EVENT_NAME, OperationDebugEvent { message });
 }

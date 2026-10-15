@@ -207,6 +207,7 @@ pub struct Runner {
     /// runner's call sites. The runner just calls `tap` / `swipe` /
     /// `swipe_with_settle` against the trait.
     touch: Box<dyn TouchBackend>,
+    diagnostic_adb: Adb,
 }
 
 impl Runner {
@@ -235,6 +236,7 @@ impl Runner {
         let touch = touch::build(&adb, &app_handle, (screen_w, screen_h));
         let rank_up_quest = config.rank_up_quest.clone().map(RankUpQuestRuntime::new);
         Self {
+            diagnostic_adb: adb,
             touch,
             sidecar: Some(sidecar),
             sidecar_cache,

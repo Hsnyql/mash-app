@@ -7,6 +7,7 @@ mod client;
 mod error;
 mod operations;
 mod protocol;
+mod recognition_diagnostics;
 mod types;
 
 pub use client::{SidecarClient, TemplateLoadSpec};

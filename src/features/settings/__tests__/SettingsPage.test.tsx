@@ -111,7 +111,6 @@ describe("SettingsPage", () => {
           sequenceRecognitionDebugMode: "disabled",
           autoCaptureBattleBeforeAttack: false,
           autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: false,
           autoCaptureSkillUseProbe: false,
           autoCaptureUnrecognizedCriticalChance: false,
           simulateStuckAttackSelection: false,
@@ -234,18 +233,6 @@ describe("SettingsPage", () => {
           imageRecognitionDebugMode: "disabled",
           autoCaptureBattleBeforeAttack: false,
           autoCaptureBattleResultLoot: Boolean(argValue(args)),
-          autoCaptureUnknownScreenTimeout: false,
-          autoCaptureSkillUseProbe: false,
-          autoCaptureUnrecognizedCriticalChance: false,
-          simulateStuckAttackSelection: false,
-        };
-      }
-      if (cmd === "set_auto_capture_unknown_screen_timeout") {
-        return {
-          imageRecognitionDebugMode: "disabled",
-          autoCaptureBattleBeforeAttack: false,
-          autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: Boolean(argValue(args)),
           autoCaptureSkillUseProbe: false,
           autoCaptureUnrecognizedCriticalChance: false,
           simulateStuckAttackSelection: false,
@@ -256,7 +243,6 @@ describe("SettingsPage", () => {
           imageRecognitionDebugMode: "disabled",
           autoCaptureBattleBeforeAttack: false,
           autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: false,
           autoCaptureSkillUseProbe: Boolean(argValue(args)),
           autoCaptureUnrecognizedCriticalChance: false,
           simulateStuckAttackSelection: false,
@@ -267,7 +253,6 @@ describe("SettingsPage", () => {
           imageRecognitionDebugMode: "disabled",
           autoCaptureBattleBeforeAttack: false,
           autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: false,
           autoCaptureSkillUseProbe: false,
           autoCaptureUnrecognizedCriticalChance: Boolean(argValue(args)),
           simulateStuckAttackSelection: false,
@@ -278,7 +263,6 @@ describe("SettingsPage", () => {
           imageRecognitionDebugMode: "disabled",
           autoCaptureBattleBeforeAttack: false,
           autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: false,
           autoCaptureSkillUseProbe: false,
           autoCaptureUnrecognizedCriticalChance: false,
           simulateStuckAttackSelection: Boolean(argValue(args)),
@@ -289,7 +273,6 @@ describe("SettingsPage", () => {
           imageRecognitionDebugMode: "disabled",
           autoCaptureBattleBeforeAttack: Boolean(argValue(args)),
           autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: false,
           autoCaptureSkillUseProbe: false,
           autoCaptureUnrecognizedCriticalChance: false,
           simulateStuckAttackSelection: false,
@@ -301,7 +284,6 @@ describe("SettingsPage", () => {
           sequenceRecognitionDebugMode: "disabled",
           autoCaptureBattleBeforeAttack: false,
           autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: false,
           autoCaptureSkillUseProbe: false,
           autoCaptureUnrecognizedCriticalChance: false,
           simulateStuckAttackSelection: false,
@@ -313,7 +295,6 @@ describe("SettingsPage", () => {
           sequenceRecognitionDebugMode: argValue(args),
           autoCaptureBattleBeforeAttack: false,
           autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: false,
           autoCaptureSkillUseProbe: false,
           autoCaptureUnrecognizedCriticalChance: false,
           simulateStuckAttackSelection: false,
@@ -487,7 +468,7 @@ describe("SettingsPage", () => {
     expect(screen.getByText("图像识别调试")).toBeInTheDocument();
     expect(screen.getByText("完整数字识别调试")).toBeInTheDocument();
     expect(screen.getByText("点击攻击前自动截图")).toBeInTheDocument();
-    expect(screen.getByText("无法识别画面超时时截图")).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "无法识别画面超时时截图" })).not.toBeInTheDocument();
     expect(screen.getByText("保存技能确认 probe 截图")).toBeInTheDocument();
     expect(screen.getByText("暴击率无法识别时截图")).toBeInTheDocument();
     expect(screen.getByText("测试选卡卡住恢复")).toBeInTheDocument();
@@ -523,14 +504,6 @@ describe("SettingsPage", () => {
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("set_auto_capture_battle_result_loot", {
-        value: true,
-      });
-    });
-
-    await user.click(screen.getByRole("switch", { name: "无法识别画面超时时截图" }));
-
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("set_auto_capture_unknown_screen_timeout", {
         value: true,
       });
     });
