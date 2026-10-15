@@ -8,6 +8,8 @@
 #[serde(rename_all = "snake_case")]
 pub(super) enum SidecarCommand {
     Detect,
+    ConfigureRecognitionDiagnostics,
+    GetRecognitionDiagnostics,
     FindCommandCards,
     FindElement,
     FindElementByName,

@@ -37,7 +37,10 @@ impl SidecarClient {
         &mut self,
         image_path: Option<&Path>,
     ) -> Result<(String, f64), CvError> {
-        let mut req = request(SidecarCommand::Detect, serde_json::json!({}))?;
+        let mut req = request(
+            SidecarCommand::Detect,
+            serde_json::json!({"diagnostics": self.diagnostic_enabled}),
+        )?;
         // Unscoped debug classification remains best-effort. Automation
         // supplies its own screen scope and treats missing templates as fatal.
         if let Some(screens) = &self.detection_screens {

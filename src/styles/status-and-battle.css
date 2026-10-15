@@ -901,3 +901,14 @@
     height: min(52vh, 360px);
   }
 }
+
+.recognition-diagnostic-thumbnail {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  box-sizing: border-box;
+  border: 1px solid var(--gray-6);
+  border-radius: var(--radius-2);
+  background: var(--gray-3);
+}

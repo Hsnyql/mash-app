@@ -33,11 +33,20 @@ impl Runner {
                 message: message.to_string(),
             });
             self.emit("CV", &message.to_string());
+            self.save_recognition_failure(&message.to_string());
         }
     }
 
     fn run_loop(&mut self) -> AutomationResult<()> {
         self.sidecar().use_battle_detection();
+        let capture = self.config.auto_capture_unknown_screen_timeout;
+        let timeout = self.config.unknown_screen_timeout_count;
+        if let Err(error) = self
+            .sidecar()
+            .configure_recognition_diagnostics(capture, timeout)
+        {
+            self.emit_debug("CV", &error);
+        }
         self.transition_lifecycle(RunnerLifecycleEvent::WorkerStarted);
         if let Some(recorder) = &self.run_recorder {
             recorder.mark_running();
@@ -63,6 +72,7 @@ impl Runner {
                         message: e.to_string(),
                     });
                     self.emit("", &format!("画面识别失败: {e}"));
+                    self.save_recognition_failure(&e.to_string());
                     return Ok(());
                 }
             };
@@ -194,21 +204,6 @@ impl Runner {
                         self.transition_lifecycle(RunnerLifecycleEvent::Failed {
                             message: message.into(),
                         });
-                        if self.config.auto_capture_unknown_screen_timeout {
-                            match self
-                                .capture_unknown_screen_timeout_screenshot()
-                                .recoverable()?
-                            {
-                                Ok(path) => self.emit(
-                                    "Unknown",
-                                    &format!("无法识别画面截图已保存: {}", path.display()),
-                                ),
-                                Err(err) => self.emit_warn(
-                                    "Unknown",
-                                    &format!("无法识别画面截图保存失败: {err}"),
-                                ),
-                            }
-                        }
                         self.emit(
                             if self.rank_up_quest_transition_message().is_some() {
                                 "RankUpQuest"
@@ -217,6 +212,7 @@ impl Runner {
                             },
                             &format!("{message}，已停止"),
                         );
+                        self.save_recognition_failure(message);
                         return Ok(());
                     }
                     if let Some(message) = self.rank_up_quest_transition_message() {
@@ -292,21 +288,7 @@ impl Runner {
                         message: message.into(),
                     });
                     self.emit("TeamConfirm", &format!("{message}，已停止"));
-                    if self.config.auto_capture_unknown_screen_timeout {
-                        match self
-                            .capture_unknown_screen_timeout_screenshot()
-                            .recoverable()?
-                        {
-                            Ok(path) => self.emit(
-                                "TeamConfirm",
-                                &format!("开始任务超时截图已保存: {}", path.display()),
-                            ),
-                            Err(err) => self.emit_warn(
-                                "TeamConfirm",
-                                &format!("开始任务超时截图保存失败: {err}"),
-                            ),
-                        }
-                    }
+                    self.save_recognition_failure(message);
                     true
                 }
             },

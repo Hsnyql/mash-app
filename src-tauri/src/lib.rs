@@ -10,6 +10,7 @@ mod models;
 mod operation_log;
 mod paths;
 mod platform;
+mod recognition_diagnostics;
 mod runner;
 mod screen;
 mod server;
@@ -81,6 +82,8 @@ pub fn run() {
             app.manage(Mutex::new(CraftEssenceEnhancementRunnerHandle::new_idle()));
             app.manage(Mutex::new(FriendPointSummonRunnerHandle::new_idle()));
             app.manage(AutomationCoordinator::default());
+            app.manage(recognition_diagnostics::DiagnosticLogs::default());
+            app.manage(recognition_diagnostics::DiagnosticStore::default());
             app.manage(commands::projects::CommandEditorLock::default());
             app.manage(Arc::new(ResourceDownloadCancelState::default()));
             app.manage(commands::debug::DebugSidecar::new());
@@ -207,6 +210,10 @@ pub fn run() {
             commands::automation::start_friend_point_summon_automation,
             commands::automation::stop_friend_point_summon_automation,
             commands::automation::get_friend_point_summon_automation_status,
+            recognition_diagnostics::list_recognition_diagnostics,
+            recognition_diagnostics::export_recognition_diagnostic,
+            recognition_diagnostics::delete_recognition_diagnostic,
+            recognition_diagnostics::clear_recognition_diagnostics,
             commands::debug::debug_capture,
             commands::debug::debug_stream_connect,
             commands::debug::debug_stream_disconnect,

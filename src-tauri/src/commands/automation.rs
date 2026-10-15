@@ -179,6 +179,7 @@ fn emit_automation_status_with_level(
         let s = state.lock().unwrap();
         (format!("{:?}", *s), s.status())
     };
+    crate::recognition_diagnostics::logs::record(app, screen, message);
     let _ = app.emit(
         "automation-status",
         AutomationEvent {
@@ -398,6 +399,7 @@ fn start_automation_with_config(
             recorder: run_recorder.clone(),
             state: state.clone(),
         };
+        crate::recognition_diagnostics::logs::begin(&app);
         emit_automation_status(&app, &state, "", "正在连接 ADB…");
         let mut adb_dev = adb::Adb::new(&app, selected_adb_serial);
         if let Err(err) = adb_dev.connect() {

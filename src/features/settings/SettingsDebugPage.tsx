@@ -301,7 +301,7 @@ export function SettingsDebugPage({ active }: { active: boolean }) {
               无法识别画面超时时截图
             </Text>
             <Text size="1" color="gray">
-              开启后自动化因无法识别当前画面超时停止时，会保存当前画面截图用于排查模板或弹窗问题。
+              开启后会保留实际参与识别的首次、中间及超时帧，失败后可从操作日志导出诊断包。
             </Text>
           </Flex>
 

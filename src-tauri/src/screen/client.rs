@@ -23,6 +23,10 @@ pub struct SidecarClient {
     stream_size: Option<(u32, u32)>,
     healthy: bool,
     pub(super) detection_screens: Option<Vec<String>>,
+    pub(super) diagnostic_supported: bool,
+    pub(super) diagnostic_enabled: bool,
+    pub(crate) recognition_context: serde_json::Value,
+    pub(crate) recognition_device: serde_json::Value,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +143,10 @@ impl SidecarClient {
             stream_size: None,
             healthy: true,
             detection_screens: None,
+            diagnostic_supported: false,
+            diagnostic_enabled: false,
+            recognition_context: serde_json::json!({}),
+            recognition_device: serde_json::json!({}),
         };
 
         // Wait for the sidecar to finish its cold-boot before sending any real
@@ -148,7 +156,11 @@ impl SidecarClient {
         // request/response pairs in lockstep.
         let ping = request(SidecarCommand::Ping, serde_json::json!({}))?;
         match client.send_recv_with_timeout(&ping, Duration::from_secs(90)) {
-            Ok(resp) => eprintln!("[mash-cv] ping -> {resp}"),
+            Ok(resp) => {
+                client.diagnostic_supported =
+                    resp["recognitionDiagnosticsVersion"].as_u64() == Some(1);
+                eprintln!("[mash-cv] ping -> {resp}");
+            }
             Err(e) => {
                 let detail = format!("sidecar did not become ready: {e}");
                 eprintln!("[mash-cv startup] {detail}");
@@ -216,6 +228,8 @@ impl SidecarClient {
             Err(e) => eprintln!("[mash-cv] set_server failed (sidecar may be stale): {e}"),
         }
 
+        client.recognition_context =
+            crate::recognition_diagnostics::launch_context(&exe, &code_dir, config_paths, server);
         Ok(client)
     }
 
@@ -397,6 +411,8 @@ impl SidecarClient {
             return Err("start_stream returned invalid dimensions".into());
         }
         self.stream_size = Some((w, h));
+        self.recognition_context["stream"] = serde_json::json!({"width": w, "height": h,
+            "maxSize": max_size, "bitRate": bit_rate, "maxFps": max_fps});
         Ok((w, h))
     }
 
@@ -456,6 +472,7 @@ impl SidecarClient {
     /// this client is placed back into the shared sidecar cache.
     pub fn prepare_for_cache(&mut self) -> Result<(), CvError> {
         self.detection_screens = None;
+        self.diagnostic_enabled = false;
         let stream_error = self.stop_stream().err();
         let ocr_error = self.release_ocr().err();
         match (stream_error, ocr_error) {
@@ -571,6 +588,10 @@ mod tests {
             stream_size: None,
             healthy: true,
             detection_screens: None,
+            diagnostic_supported: false,
+            diagnostic_enabled: false,
+            recognition_context: serde_json::json!({}),
+            recognition_device: serde_json::json!({}),
         }
     }
 
