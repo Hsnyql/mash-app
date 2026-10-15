@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { renderWithTheme } from "../../../test/renderWithTheme";
 import { RecognitionDiagnosticActions } from "../RecognitionDiagnosticActions";
 
-const record = { id: "record-1", createdAtMs: 1000, reason: "无法识别当前画面", imagePaths: ["/tmp/frame-1.png", "/tmp/frame-2.png", "/tmp/frame-3.png"], missing: [], userDescription: "" };
+const record = { id: "record-1", createdAtMs: 1000, reason: "无法识别当前画面", imagePaths: ["/tmp/frame-1.png", "/tmp/frame-2.png"], missing: [], userDescription: "" };
 beforeEach(() => { vi.mocked(invoke).mockReset(); });
 
 describe("RecognitionDiagnosticActions", () => {
@@ -51,7 +51,7 @@ describe("RecognitionDiagnosticActions", () => {
     vi.mocked(invoke).mockImplementation(async (cmd) => cmd === "list_recognition_diagnostics" ? [{ ...record, userDescription: "已有描述" }] : null);
     renderWithTheme(<RecognitionDiagnosticActions />);
     await user.click(await screen.findByRole("button", { name: "识别失败诊断" }));
-    expect(screen.getAllByRole("img")).toHaveLength(3);
+    expect(screen.getAllByRole("img")).toHaveLength(2);
     const input = screen.getByRole("textbox", { name: "问题描述（选填）" });
     expect(input).toHaveValue("已有描述");
     await user.clear(input);
@@ -130,7 +130,7 @@ describe("RecognitionDiagnosticActions", () => {
     await user.click(screen.getByRole("button", { name: "确认删除" }));
     expect(await screen.findByRole("status")).toHaveTextContent("清除失败");
     expect(screen.getByRole("button", { name: "删除当前记录" })).toBeEnabled();
-    expect(screen.getAllByRole("img")).toHaveLength(3);
+    expect(screen.getAllByRole("img")).toHaveLength(2);
   });
 
 });

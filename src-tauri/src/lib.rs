@@ -188,7 +188,6 @@ pub fn run() {
             commands::settings::set_unknown_screen_timeout_count,
             commands::settings::set_auto_capture_battle_before_attack,
             commands::settings::set_auto_capture_battle_result_loot,
-            commands::settings::set_auto_capture_unknown_screen_timeout,
             commands::settings::set_auto_capture_skill_use_probe,
             commands::settings::set_auto_capture_unrecognized_critical_chance,
             commands::settings::set_simulate_stuck_attack_selection,

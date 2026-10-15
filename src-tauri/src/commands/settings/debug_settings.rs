@@ -38,8 +38,6 @@ pub struct DebugSettings {
     #[serde(default)]
     pub auto_capture_battle_result_loot: bool,
     #[serde(default)]
-    pub auto_capture_unknown_screen_timeout: bool,
-    #[serde(default)]
     pub auto_capture_skill_use_probe: bool,
     #[serde(default)]
     pub auto_capture_unrecognized_critical_chance: bool,
@@ -140,14 +138,6 @@ fn debug_settings_with_auto_capture_battle_before_attack(
     settings
 }
 
-fn debug_settings_with_auto_capture_unknown_screen_timeout(
-    mut settings: DebugSettings,
-    value: bool,
-) -> DebugSettings {
-    settings.auto_capture_unknown_screen_timeout = value;
-    settings
-}
-
 fn debug_settings_with_auto_capture_skill_use_probe(
     mut settings: DebugSettings,
     value: bool,
@@ -202,17 +192,6 @@ pub(crate) fn set_sequence_recognition_debug_mode(
 ) -> Result<DebugSettings, String> {
     update_debug_settings(&app, state.inner(), |settings| {
         *settings = debug_settings_with_sequence_recognition_debug_mode(*settings, value);
-    })
-}
-
-#[tauri::command]
-pub(crate) fn set_auto_capture_unknown_screen_timeout(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Mutex<DebugSettings>>,
-    value: bool,
-) -> Result<DebugSettings, String> {
-    update_debug_settings(&app, state.inner(), |settings| {
-        *settings = debug_settings_with_auto_capture_unknown_screen_timeout(*settings, value);
     })
 }
 

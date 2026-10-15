@@ -80,8 +80,8 @@ export function RecognitionDiagnosticActions() {
               <Select.Content>{records.map((record) => <Select.Item key={record.id} value={record.id}>{new Date(record.createdAtMs).toLocaleString()} · {record.reason}</Select.Item>)}</Select.Content>
             </Select.Root>
             <Text size="2">{selected.reason}</Text>
-            {selected.imagePaths.length === 0 && <Text size="2" color="gray">没有现场截图。可在调试设置中开启“无法识别画面超时时截图”。</Text>}
-            <Grid columns="3" gap="2">
+            {selected.imagePaths.length === 0 && <Text size="2" color="gray">没有可用的现场截图，具体原因见下方缺失证据。</Text>}
+            <Grid columns="2" gap="2">
               {selected.imagePaths.map((path, index) => (
                 <Box key={path} minWidth="0">
                   <Text as="p" size="1" color="gray" mb="1">现场 {index + 1}</Text>

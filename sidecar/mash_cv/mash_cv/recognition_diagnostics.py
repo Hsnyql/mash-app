@@ -58,9 +58,8 @@ class RecognitionDiagnostics:
     def __init__(self) -> None:
         self.reset()
 
-    def reset(self, capture_images: bool = False, timeout_count: int = 100) -> None:
-        self.capture_images = capture_images
-        self.midpoint = max(1, timeout_count // 2)
+    def reset(self, timeout_count: int = 100) -> None:
+        self.midpoint = max(2, timeout_count // 2)
         self.unknown_count = 0
         self.samples: dict[str, tuple[dict, object]] = {}
 
@@ -92,10 +91,8 @@ class RecognitionDiagnostics:
                         "result": result, "error": error,
                         "screenScope": copy.deepcopy(screen_names),
                         "unknownCount": self.unknown_count, "candidates": collector["candidates"]}
-            frozen = img.copy() if self.capture_images and img is not None else None
+            frozen = img.copy() if img is not None else None
             sample = (evidence, frozen)
-            if self.unknown_count == 1:
-                self.samples["first"] = sample
             if self.unknown_count == self.midpoint:
                 self.samples["middle"] = sample
             # Also retain the last successful classification for other stop paths.
@@ -109,7 +106,7 @@ class RecognitionDiagnostics:
 
     def export(self, configuration=None, template_path=None) -> dict:
         samples = []
-        for stage in ("first", "middle", "last"):
+        for stage in ("middle", "last"):
             if stage not in self.samples:
                 continue
             evidence, image = self.samples[stage]
@@ -124,7 +121,7 @@ class RecognitionDiagnostics:
                 except Exception:
                     entry["imageError"] = "png_encode_failed"
             else:
-                entry["imageError"] = "capture_disabled" if not self.capture_images else "frame_unavailable"
+                entry["imageError"] = "frame_unavailable"
             samples.append(entry)
         report = {"schemaVersion": 1, "samples": samples,
                   "runtime": {"pythonVersion": sys.version.split()[0], "opencvVersion": cv2.__version__}}

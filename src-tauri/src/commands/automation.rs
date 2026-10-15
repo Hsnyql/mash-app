@@ -358,7 +358,6 @@ fn start_automation_with_config(
     config.auto_capture_battle_before_attack = debug_settings.auto_capture_battle_before_attack;
     config.auto_capture_battle_result_loot = debug_settings.auto_capture_battle_result_loot;
     config.auto_friend_request = recognition_settings.auto_friend_request;
-    config.auto_capture_unknown_screen_timeout = debug_settings.auto_capture_unknown_screen_timeout;
     config.auto_capture_skill_use_probe = debug_settings.auto_capture_skill_use_probe;
     config.auto_capture_unrecognized_critical_chance =
         debug_settings.auto_capture_unrecognized_critical_chance;

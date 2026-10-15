@@ -39,12 +39,8 @@ impl Runner {
 
     fn run_loop(&mut self) -> AutomationResult<()> {
         self.sidecar().use_battle_detection();
-        let capture = self.config.auto_capture_unknown_screen_timeout;
         let timeout = self.config.unknown_screen_timeout_count;
-        if let Err(error) = self
-            .sidecar()
-            .configure_recognition_diagnostics(capture, timeout)
-        {
+        if let Err(error) = self.sidecar().configure_recognition_diagnostics(timeout) {
             self.emit_debug("CV", &error);
         }
         self.transition_lifecycle(RunnerLifecycleEvent::WorkerStarted);

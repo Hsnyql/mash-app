@@ -31,16 +31,17 @@ def decode_image(sample):
     return cv2.imdecode(np.frombuffer(base64.b64decode(sample["pngB64"]), np.uint8), cv2.IMREAD_COLOR)
 
 
-def test_samples_freeze_first_middle_last_pixels_and_clear_on_recovery(setup_classifier):
+def test_samples_freeze_only_middle_and_last_pixels_and_clear_on_recovery(setup_classifier):
     recorder = RecognitionDiagnostics()
-    recorder.reset(True, 6)
+    recorder.reset(6)
     image = np.zeros((50, 80, 3), np.uint8)
     for frame_id in range(1, 7):
         image[:] = frame_id
         recorder.detect(image, {"frameId": frame_id}, cv._detect_screen, ["Battle"])
     image[:] = 200
     samples = recorder.export()["samples"]
-    assert [s["frame"]["frameId"] for s in samples] == [1, 3, 6]
+    assert [s["stage"] for s in samples] == ["middle", "last"]
+    assert [s["frame"]["frameId"] for s in samples] == [3, 6]
     for sample in samples:
         assert np.all(decode_image(sample) == sample["frame"]["frameId"])
     recorder.detect(image, {}, lambda *_: {"screen": "Battle", "score": .9})
@@ -60,15 +61,15 @@ def test_below_threshold_keeps_score_and_best_box_without_changing_decision(setu
     assert probe["originalTemplateSize"] == {"w": 12, "h": 12}
 
 
-def test_uncomputable_score_is_null_and_capture_toggle_is_respected(setup_classifier):
+def test_uncomputable_score_is_null_and_capture_is_automatic(setup_classifier):
     recorder = RecognitionDiagnostics()
     recorder.detect(np.zeros((5, 5, 3), np.uint8), {}, cv._detect_screen, ["Battle"])
     sample = recorder.export()["samples"][-1]
     probe = sample["candidates"][0]["probes"][0]
     assert probe["score"] is None
     assert probe["reason"] == "template_larger_than_region"
-    assert sample["imageError"] == "capture_disabled"
-    assert "pngB64" not in sample
+    assert "pngB64" in sample
+    assert "imageError" not in sample
 
 
 def test_missing_template_keeps_failure_frame_and_short_circuit_reasons(setup_classifier):
@@ -76,7 +77,7 @@ def test_missing_template_keeps_failure_frame_and_short_circuit_reasons(setup_cl
     cv.config["screens"]["Battle"]["detect"] = {"requiredTemplates": [
         {"template": "missing", "region": region}, {"template": "button", "region": region}]}
     recorder = RecognitionDiagnostics()
-    recorder.reset(True)
+    recorder.reset()
     frame = np.zeros((50, 80, 3), np.uint8)
     with pytest.raises(cv.TemplateLoadError):
         recorder.detect(frame, {"frameId": 7}, cv._detect_screen, ["Battle"])
@@ -116,7 +117,7 @@ def test_repl_returns_same_frame_png_and_echoes_request_id(setup_classifier, mon
     path = tmp_path / "frame.png"
     cv2.imwrite(str(path), frame)
     monkeypatch.setattr(cv, "recognition_diagnostics", RecognitionDiagnostics())
-    commands = [{"cmd": "configure_recognition_diagnostics", "captureImages": True, "id": 1},
+    commands = [{"cmd": "configure_recognition_diagnostics", "captureImages": False, "id": 1},
                 {"cmd": "detect", "diagnostics": True, "imagePath": str(path), "id": 2},
                 {"cmd": "get_recognition_diagnostics", "id": 3}]
     monkeypatch.setattr(cv.sys, "stdin", io.StringIO("\n".join(json.dumps(c) for c in commands)))
@@ -131,7 +132,7 @@ def test_repl_returns_same_frame_png_and_echoes_request_id(setup_classifier, mon
 
 def test_no_frame_does_not_relabel_a_preceding_frame(setup_classifier):
     recorder = RecognitionDiagnostics()
-    recorder.reset(True)
+    recorder.reset()
     recorder.detect(np.zeros((50, 80, 3), np.uint8), {"frameId": 1}, cv._detect_screen)
     recorder.no_frame("decoder stopped")
     sample = recorder.export()["samples"][-1]
@@ -204,3 +205,18 @@ def test_template_sources_follow_namespace_override_and_reload(setup_classifier,
     cv._load_templates(str(replacement))
     assert cv._template_source_path_for_key("shared/button") is None
     assert cv._template_source_path_for_key("button") == str(replacement / "button.png")
+
+
+@pytest.mark.parametrize("timeout_count", [1, 2, 3, 6, 100])
+def test_no_initial_sample_and_at_most_two_images_at_any_timeout(setup_classifier, timeout_count):
+    recorder = RecognitionDiagnostics()
+    recorder.reset(timeout_count)
+    frame = np.zeros((50, 80, 3), np.uint8)
+    for index in range(timeout_count):
+        recorder.detect(frame, {"frameId": index + 1}, cv._detect_screen)
+        assert "first" not in recorder.samples
+        assert len(recorder.samples) <= 2
+    samples = recorder.export()["samples"]
+    assert len(samples) <= 2
+    assert all("pngB64" in sample for sample in samples)
+    assert all(sample["frame"]["frameId"] != 1 for sample in samples if sample["stage"] == "middle")

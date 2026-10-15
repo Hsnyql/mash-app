@@ -7190,9 +7190,7 @@ def _main_repl() -> None:
             elif action == "ping":
                 _reply(req_id, {"ok": True, "recognitionDiagnosticsVersion": 1})
             elif action == "configure_recognition_diagnostics":
-                recognition_diagnostics.reset(
-                    bool(cmd.get("captureImages", False)), int(cmd.get("timeoutCount", 100))
-                )
+                recognition_diagnostics.reset(int(cmd.get("timeoutCount", 100)))
                 _reply(req_id, {"ok": True})
             elif action == "get_recognition_diagnostics":
                 _reply(req_id, recognition_diagnostics.export(config, _template_source_path_for_key))

@@ -1057,7 +1057,6 @@ fn run_config_defaults_support_ce_to_none_when_field_missing() {
     );
     assert!(!cfg.auto_capture_battle_before_attack);
     assert!(!cfg.auto_capture_battle_result_loot);
-    assert!(!cfg.auto_capture_unknown_screen_timeout);
     assert!(!cfg.auto_capture_skill_use_probe);
     assert!(!cfg.auto_capture_unrecognized_critical_chance);
     assert!(!cfg.prefer_higher_critical_chance);
