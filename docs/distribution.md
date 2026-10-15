@@ -206,18 +206,23 @@ builder 生成，与平台无关；不要重复发布同版本但不同内容的
 正式发布使用 `.github/workflows/cv-code-release.yml` 的手动运行入口。workflow
 默认只构建候选包；勾选 `publish` 后，必须在默认分支上运行，并按以下顺序执行：
 
+在测试分支上可勾选 `r2_test_only`，仅通过 R2 S3 API 下载指定 `code_version` 的
+已发布 code ZIP 并打印 SHA-256；该模式不执行构建、上传、tag 或 manifest PR。
+
 发布 environment `cv-code-release` 需要配置 `R2_ACCESS_KEY_ID` 与
 `R2_SECRET_ACCESS_KEY` secrets，以及 `R2_ENDPOINT`、`R2_BUCKET` 和可选的
-`RELEASE_BASE_URL`、`R2_PREFIX` variables。为该 environment 配置人工审批，
-使候选测试和真正上传分开。
+`RELEASE_BASE_URL`、`R2_PREFIX` variables。兼容性测试和发布 job 都使用该
+environment，凭据需要具备对象读取权限，发布时还需要对象写入权限。
+若该 environment 配置了人工审批，候选兼容性测试也需要审批后才会开始。
 
 1. 固定 `source_ref` 到 commit SHA，读取该 commit 中已发布的 Windows x64 与
    macOS Apple Silicon runtime 版本、URL 和 SHA-256；
 2. 在 Linux 上构建一次 `mash-cv-code-v<version>.zip`，保存候选包和发布记录；
-3. 在 Windows 与 macOS runner 上分别下载清单中的原生 runtime，使用同一份 code
-   ZIP 做源码测试、冻结 runtime 兼容性测试和对应平台的 Rust 导入测试；
-4. 使用候选包原文件上传 R2，使用条件写入保护不可变对象，再从公开 CDN 完整下载
-   并验证 SHA-256；
+3. 在 Windows 与 macOS runner 上通过 R2 S3 API 下载清单中的原生 runtime 并验证
+   SHA-256，使用同一份 code ZIP 做源码测试、冻结 runtime 兼容性测试和对应平台的
+   Rust 导入测试；
+4. 使用候选包原文件上传 R2，使用条件写入保护不可变对象，再通过 R2 S3 API
+   完整下载并验证 SHA-256；workflow 不测试公网 CDN 下载。
 5. 创建或验证 `cv-code/<version>` tag，并生成更新 `versions.toml` 与
    `runtime-manifest.json` 的 PR。
 
@@ -225,6 +230,9 @@ Code 版本是所有平台共用的字段，因此 PR 会同步更新 manifest �
 `codeUrl` 与 `codeSha256`；runtime 字段和 runtime 文件不会被修改。发布失败后应
 重新运行同一个候选版本，脚本会复用同 SHA-256 的已上传对象，并拒绝覆盖不同内容。
 App 发布必须等这个 PR 合并后再创建新的 App tag。
+
+runtime 的 object key 从清单 URL 中移除 `RELEASE_BASE_URL` 前缀得到，URL 必须属于
+该前缀。manifest 和发布记录仍保存供应用使用的公开 URL；CI 只通过 R2 API 获取文件。
 
 ## CV Runtime 发布
 

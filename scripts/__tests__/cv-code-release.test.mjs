@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
-import { applyRelease, digest, downloadDigest, location, planRelease, platforms,
+import { applyRelease, digest, location, planRelease, platforms,
   publishImmutable, recordRelease, tagRelease, validateReceipt, validateReports } from "../shared/cv-code-release.mjs";
 
 function fixture(t) {
@@ -118,7 +118,7 @@ test("manifest application rejects changed source, changed runtime and downgrade
   assert.throws(() => applyRelease({ ...receipt, version: "0.9.0", ...location("0.9.0", "https://example.invalid") }), /stale/);
 });
 
-function fakeStore(file) {
+function fakeStore() {
   const objects = new Map();
   const calls = [];
   const aws = args => {
@@ -130,45 +130,55 @@ function fakeStore(file) {
       objects.set(key, fs.readFileSync(args[args.indexOf("--body") + 1]));
     } else fs.writeFileSync(args.at(-1), objects.get(key));
   };
-  return { objects, calls, options: { aws, remoteDigest: async () => digest(file) } };
+  return { objects, calls, options: { aws } };
 }
 
 test("conditional upload reuses identical objects and refuses conflicting bytes", async t => {
   const f = fixture(t);
   f.write("code.zip", "tested ZIP");
-  const store = fakeStore("code.zip");
-  await publishImmutable("code.zip", "code.zip", "https://example.invalid/code.zip", store.options);
-  await publishImmutable("code.zip", "code.zip", "https://example.invalid/code.zip", store.options);
-  assert.equal(store.calls.filter(args => args[1] === "get-object").length, 1);
+  const store = fakeStore();
+  t.mock.method(globalThis, "fetch", () => { throw new Error("Public downloads are forbidden"); });
+  await publishImmutable("code.zip", "code.zip", store.options);
+  await publishImmutable("code.zip", "code.zip", store.options);
+  assert.equal(store.calls.filter(args => args[1] === "get-object").length, 2);
   store.objects.set("code.zip", Buffer.from("another release"));
-  await assert.rejects(publishImmutable("code.zip", "code.zip", "https://example.invalid/code.zip", store.options), /differs/);
+  await assert.rejects(publishImmutable("code.zip", "code.zip", store.options), /differs/);
   assert.equal(store.objects.get("code.zip").toString(), "another release");
 });
 
-test("CDN failure can retry the original artifact without overwriting it", async t => {
+test("R2 read failure can retry the original artifact without overwriting it", async t => {
   const f = fixture(t);
   f.write("code.zip", "tested ZIP");
-  const store = fakeStore("code.zip");
-  await assert.rejects(publishImmutable("code.zip", "code.zip", "https://example.invalid/code.zip", {
-    ...store.options, remoteDigest: async () => "wrong",
-  }), /CDN SHA-256/);
-  await publishImmutable("code.zip", "code.zip", "https://example.invalid/code.zip", store.options);
-  await assert.rejects(publishImmutable("code.zip", "new.zip", "https://example.invalid/new.zip", {
+  const store = fakeStore();
+  let temporaryFile;
+  await assert.rejects(publishImmutable("code.zip", "code.zip", {
+    aws: args => {
+      if (args[1] === "get-object") {
+        temporaryFile = args.at(-1);
+        fs.writeFileSync(temporaryFile, "partial download");
+        throw new Error("Download interrupted");
+      }
+      return store.options.aws(args);
+    },
+  }), /Download interrupted/);
+  assert.equal(fs.existsSync(path.dirname(temporaryFile)), false);
+  assert.equal(store.objects.get("code.zip").toString(), "tested ZIP");
+  await publishImmutable("code.zip", "code.zip", store.options);
+  await assert.rejects(publishImmutable("code.zip", "new.zip", {
     ...store.options, aws: () => { throw new Error("AccessDenied"); },
   }), /AccessDenied/);
 });
 
-test("CDN verification hashes the complete body and propagates HTTP failures", async t => {
+test("R2 verification rejects incorrect bytes after a successful upload", async t => {
   const f = fixture(t);
-  f.write("code.zip", "full response");
-  assert.equal(await downloadDigest("https://example.invalid/code.zip", async (url, options) => {
-    assert.equal(url, "https://example.invalid/code.zip");
-    assert.equal(options.headers["User-Agent"], "mash-release/1.0");
-    assert.equal(options.cache, "no-store");
-    assert.equal(options.signal.aborted, false);
-    return new Response("full response");
-  }), digest("code.zip"));
-  await assert.rejects(downloadDigest("https://example.invalid/code.zip", async () => new Response("", { status: 404 })), /404/);
+  f.write("code.zip", "tested ZIP");
+  const store = fakeStore();
+  await assert.rejects(publishImmutable("code.zip", "code.zip", {
+    aws: args => {
+      if (args[1] === "get-object") fs.writeFileSync(args.at(-1), "incorrect bytes");
+      else store.options.aws(args);
+    },
+  }), /Immutable object differs/);
 });
 
 test("tag creation is retryable and never moves an existing tag", t => {

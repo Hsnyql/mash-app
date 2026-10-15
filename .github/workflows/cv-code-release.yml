@@ -1,5 +1,5 @@
 name: CV code release
-run-name: CV code ${{ inputs.cdn_test_only && 'CDN test' || 'release' }} v${{ inputs.code_version }}
+run-name: CV code ${{ inputs.r2_test_only && 'R2 API test' || 'release' }} v${{ inputs.code_version }}
 
 on:
   workflow_dispatch:
@@ -17,8 +17,8 @@ on:
         description: Upload verified code, create its tag, and open a manifest PR
         type: boolean
         default: false
-      cdn_test_only:
-        description: Only test public CDN download with User-Agent (runs on the selected branch)
+      r2_test_only:
+        description: Only test R2 API download (runs on the selected branch)
         type: boolean
         default: false
 
@@ -36,10 +36,11 @@ env:
   POETRY_VIRTUALENVS_IN_PROJECT: 'true'
 
 jobs:
-  cdn-test:
-    if: inputs.cdn_test_only
+  r2-test:
+    if: inputs.r2_test_only
     runs-on: ubuntu-24.04
     timeout-minutes: 6
+    environment: cv-code-release
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,56 +48,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Test public CDN download with release User-Agent
+      - name: Download CV code through the R2 API and report SHA-256
         env:
           CODE_VERSION: ${{ inputs.code_version }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          R2_BUCKET: ${{ vars.R2_BUCKET || 'mash' }}
         run: |
-          node --input-type=module <<'NODE'
-          import { downloadDigest, location } from './scripts/shared/cv-code-release.mjs';
-          const { url } = location(process.env.CODE_VERSION, process.env.RELEASE_BASE_URL, process.env.R2_PREFIX);
-          console.log(`Downloading: ${url}`);
-          console.log('User-Agent: mash-release/1.0');
-          console.log(`SHA-256: ${await downloadDigest(url)}`);
-          NODE
-      - name: Diagnose rejected public CDN requests
-        if: failure()
-        env:
-          CODE_VERSION: ${{ inputs.code_version }}
-        run: |
-          node --input-type=module <<'NODE'
-          import { location } from './scripts/shared/cv-code-release.mjs';
-          const { url } = location(process.env.CODE_VERSION, process.env.RELEASE_BASE_URL, process.env.R2_PREFIX);
-          const response = await fetch(url, {
-            signal: AbortSignal.timeout(30000), cache: 'no-store',
-            headers: { 'User-Agent': 'mash-release/1.0' },
-          });
-          console.log(`Node fetch HTTP ${response.status}`);
-          for (const name of ['server', 'content-type', 'cf-ray', 'cf-mitigated', 'cf-cache-status', 'location']) {
-            console.log(`${name}: ${response.headers.get(name) ?? '(absent)'}`);
-          }
-          if (!response.ok) {
-            const reader = response.body?.getReader();
-            if (reader) {
-              const { value } = await reader.read();
-              console.log('Error response preview:', new TextDecoder().decode(value?.slice(0, 2048)));
-              await reader.cancel();
-            }
-          } else await response.body?.cancel();
-          NODE
-          CDN_URL=$(node --input-type=module -e '
+          OBJECT_KEY=$(node --input-type=module -e '
             import { location } from "./scripts/shared/cv-code-release.mjs";
-            console.log(location(process.env.CODE_VERSION, process.env.RELEASE_BASE_URL, process.env.R2_PREFIX).url);
+            console.log(location(process.env.CODE_VERSION, process.env.RELEASE_BASE_URL, process.env.R2_PREFIX).objectKey);
           ')
-          curl --silent --show-error --max-time 30 --user-agent 'mash-release/1.0' \
-            --dump-header "$RUNNER_TEMP/cdn-headers.txt" --output "$RUNNER_TEMP/cdn-response" \
-            --write-out 'curl HTTP %{http_code}\n' "$CDN_URL"
-          cat "$RUNNER_TEMP/cdn-headers.txt"
-          if head -1 "$RUNNER_TEMP/cdn-headers.txt" | grep -q ' 403'; then
-            head -c 2048 "$RUNNER_TEMP/cdn-response"
-          fi
+          aws s3api get-object --bucket "$R2_BUCKET" --key "$OBJECT_KEY" \
+            --endpoint-url "${R2_ENDPOINT:?R2_ENDPOINT is required}" \
+            --cli-connect-timeout 30 --cli-read-timeout 300 "$RUNNER_TEMP/cv-code.zip"
+          sha256sum "$RUNNER_TEMP/cv-code.zip"
 
   plan:
-    if: ${{ !inputs.cdn_test_only }}
+    if: ${{ !inputs.r2_test_only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -179,6 +152,7 @@ jobs:
   compatibility:
     name: Published runtime compatibility (${{ matrix.platform }})
     needs: [plan, build]
+    environment: cv-code-release
     strategy:
       fail-fast: false
       matrix:
@@ -221,9 +195,16 @@ jobs:
       - name: Source CV tests
         working-directory: source/sidecar/mash_cv
         run: poetry run pytest --ignore=tests/test_windows_runtime.py
-      - name: Download the pinned runtime and exercise the packaged code
+      - name: Download the pinned runtime via R2 API and exercise the packaged code
         env:
           TARGET_PLATFORM: ${{ matrix.platform }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+          R2_BUCKET: ${{ vars.R2_BUCKET || 'mash' }}
         run: |
           python tooling/sidecar/mash_cv/verify_code_release.py candidate/release.json \
             --dist source/sidecar/mash_cv/dist --report "reports/$TARGET_PLATFORM.json"
@@ -270,7 +251,7 @@ jobs:
           pattern: cv-code-tested-*
           path: reports
           merge-multiple: true
-      - name: Upload immutable artifacts and verify full CDN downloads
+      - name: Upload immutable artifacts and verify R2 API downloads
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
