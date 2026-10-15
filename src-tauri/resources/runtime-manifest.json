@@ -12,7 +12,7 @@
       "runtimeVersion": "0.1.0",
       "runtimeUrl": "https://mash.xiaotongx.com/mash/runtime/mash-cv/runtime/windows-x86_64/mash-cv-runtime-windows-x86_64-v0.1.0.zip",
       "runtimeSha256": "1722c23bed33bc94cc0335c1c489755441d6fc9088462bda757a439808557208",
-      "codeUrl": "https://mash.xiaotongx.com/mash/runtime/mash-cv/code/mash-cv-code-v0.4.26.zip",
+      "codeUrl": "https://mash.xiaotongx.com/mash/runtime/mash-cv/code/mash-cv-code-v0.4.27.zip",
       "codeSha256": "a8f85934965ea2d381cfb2b5f22abcf969515329623fceeaa1f6b5c14bedc657"
     },
     "darwin-x86_64": {
