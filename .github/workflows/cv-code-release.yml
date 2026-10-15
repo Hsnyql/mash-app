@@ -1,5 +1,5 @@
 name: CV code release
-run-name: CV code ${{ inputs.r2_test_only && 'R2 API test' || 'release' }} v${{ inputs.code_version }}
+run-name: CV code release v${{ inputs.code_version }}
 
 on:
   workflow_dispatch:
@@ -17,10 +17,6 @@ on:
         description: Upload verified code, create its tag, and open a manifest PR
         type: boolean
         default: false
-      r2_test_only:
-        description: Only test R2 API download (runs on the selected branch)
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -36,40 +32,7 @@ env:
   POETRY_VIRTUALENVS_IN_PROJECT: 'true'
 
 jobs:
-  r2-test:
-    if: inputs.r2_test_only
-    runs-on: ubuntu-24.04
-    timeout-minutes: 6
-    environment: cv-code-release
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Download CV code through the R2 API and report SHA-256
-        env:
-          CODE_VERSION: ${{ inputs.code_version }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
-          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
-          R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
-          R2_BUCKET: ${{ vars.R2_BUCKET || 'mash' }}
-        run: |
-          OBJECT_KEY=$(node --input-type=module -e '
-            import { location } from "./scripts/shared/cv-code-release.mjs";
-            console.log(location(process.env.CODE_VERSION, process.env.RELEASE_BASE_URL, process.env.R2_PREFIX).objectKey);
-          ')
-          aws s3api get-object --bucket "$R2_BUCKET" --key "$OBJECT_KEY" \
-            --endpoint-url "${R2_ENDPOINT:?R2_ENDPOINT is required}" \
-            --cli-connect-timeout 30 --cli-read-timeout 300 "$RUNNER_TEMP/cv-code.zip"
-          sha256sum "$RUNNER_TEMP/cv-code.zip"
-
   plan:
-    if: ${{ !inputs.r2_test_only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:

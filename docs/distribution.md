@@ -206,9 +206,6 @@ builder 生成，与平台无关；不要重复发布同版本但不同内容的
 正式发布使用 `.github/workflows/cv-code-release.yml` 的手动运行入口。workflow
 默认只构建候选包；勾选 `publish` 后，必须在默认分支上运行，并按以下顺序执行：
 
-在测试分支上可勾选 `r2_test_only`，仅通过 R2 S3 API 下载指定 `code_version` 的
-已发布 code ZIP 并打印 SHA-256；该模式不执行构建、上传、tag 或 manifest PR。
-
 发布 environment `cv-code-release` 需要配置 `R2_ACCESS_KEY_ID` 与
 `R2_SECRET_ACCESS_KEY` secrets，以及 `R2_ENDPOINT`、`R2_BUCKET` 和可选的
 `RELEASE_BASE_URL`、`R2_PREFIX` variables。兼容性测试和发布 job 都使用该
