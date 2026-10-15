@@ -58,6 +58,42 @@ jobs:
           console.log('User-Agent: mash-release/1.0');
           console.log(`SHA-256: ${await downloadDigest(url)}`);
           NODE
+      - name: Diagnose rejected public CDN requests
+        if: failure()
+        env:
+          CODE_VERSION: ${{ inputs.code_version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { location } from './scripts/shared/cv-code-release.mjs';
+          const { url } = location(process.env.CODE_VERSION, process.env.RELEASE_BASE_URL, process.env.R2_PREFIX);
+          const response = await fetch(url, {
+            signal: AbortSignal.timeout(30000), cache: 'no-store',
+            headers: { 'User-Agent': 'mash-release/1.0' },
+          });
+          console.log(`Node fetch HTTP ${response.status}`);
+          for (const name of ['server', 'content-type', 'cf-ray', 'cf-mitigated', 'cf-cache-status', 'location']) {
+            console.log(`${name}: ${response.headers.get(name) ?? '(absent)'}`);
+          }
+          if (!response.ok) {
+            const reader = response.body?.getReader();
+            if (reader) {
+              const { value } = await reader.read();
+              console.log('Error response preview:', new TextDecoder().decode(value?.slice(0, 2048)));
+              await reader.cancel();
+            }
+          } else await response.body?.cancel();
+          NODE
+          CDN_URL=$(node --input-type=module -e '
+            import { location } from "./scripts/shared/cv-code-release.mjs";
+            console.log(location(process.env.CODE_VERSION, process.env.RELEASE_BASE_URL, process.env.R2_PREFIX).url);
+          ')
+          curl --silent --show-error --max-time 30 --user-agent 'mash-release/1.0' \
+            --dump-header "$RUNNER_TEMP/cdn-headers.txt" --output "$RUNNER_TEMP/cdn-response" \
+            --write-out 'curl HTTP %{http_code}\n' "$CDN_URL"
+          cat "$RUNNER_TEMP/cdn-headers.txt"
+          if head -1 "$RUNNER_TEMP/cdn-headers.txt" | grep -q ' 403'; then
+            head -c 2048 "$RUNNER_TEMP/cdn-response"
+          fi
 
   plan:
     if: ${{ !inputs.cdn_test_only }}
