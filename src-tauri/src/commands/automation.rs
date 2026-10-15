@@ -82,8 +82,11 @@ fn take_or_spawn_sidecar(
     server: Server,
 ) -> Result<screen::SidecarClient, String> {
     if let Some(client) = shared_sidecar.0.lock().unwrap().take() {
-        eprintln!("[mash-cv] reusing cached sidecar");
-        return Ok(client);
+        if client.is_healthy() {
+            eprintln!("[mash-cv] reusing cached sidecar");
+            return Ok(client);
+        }
+        eprintln!("[mash-cv] discarding sidecar after template load failure");
     }
     spawn_configured_sidecar(app, server)
 }
@@ -466,7 +469,7 @@ fn start_automation_with_config(
         ) {
             Ok(size) => size,
             Err(err) => {
-                if let Some(user_message) = scrcpy_stream_start_user_message(&err) {
+                if let Some(user_message) = scrcpy_stream_start_user_message(&err.to_string()) {
                     fail_automation_start_with_debug(
                         &app,
                         &state,

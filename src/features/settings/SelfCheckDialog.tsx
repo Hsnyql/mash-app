@@ -133,6 +133,32 @@ export function SelfCheckContent({
       </Box>
 
       <Box>
+        <Text as="div" size="2" weight="bold" mb="2">识别模板</Text>
+        <Flex direction="column" gap="3">
+          {status.templates.map((group) => (
+            <Box key={group.server}>
+              <Flex align="center" justify="between" gap="3">
+                <Text size="2">{group.server === "CN" ? "国服" : "日服"} · 已检查 {group.checked} 张</Text>
+                <Badge color={group.errors.length === 0 ? "green" : "red"}>
+                  {group.errors.length === 0 ? "正常" : `${group.errors.length} 项异常`}
+                </Badge>
+              </Flex>
+              {group.errors.length > 0 && (
+                <Box mt="2">
+                  <details>
+                    <summary>查看模板异常</summary>
+                    <Box maxHeight="200px" overflow="auto" mt="2">
+                      {group.errors.map((message) => <Text as="div" size="2" color="red" key={message}>{message}</Text>)}
+                    </Box>
+                  </details>
+                </Box>
+              )}
+            </Box>
+          ))}
+        </Flex>
+      </Box>
+
+      <Box>
         <Text as="div" size="2" weight="bold" mb="2">
           资源包
         </Text>

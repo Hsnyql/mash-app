@@ -85,6 +85,7 @@ import re
 import sys
 import time
 import unicodedata
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
 import cv2
@@ -505,7 +506,7 @@ SUPPORT_BUTTON_ANCHOR_TO_SCORE_TOP_DY = 0.147
 # offsets/W/H and just template-match each variant separately,
 # taking the per-anchor max as the row's score. Adding a new
 # variant is "drop a PNG in templates/ and append the stem here";
-# missing files are skipped silently at probe time.
+# runtime requests fail if a referenced variant is missing.
 SUPPORT_GRAND_BADGE_TEMPLATES = (
     "screen_support/text_grand_servant_support_bottom_line",
     "screen_support/text_grand_servant_support_bottom_line_2",
@@ -718,13 +719,6 @@ def _probe_skill_use_dialog(
     confirm_region: dict,
 ) -> dict:
     tmpl = _get_template(template_key)
-    if tmpl is None:
-        return {
-            "found": False,
-            "score": 0.0,
-            "meanLuma": 0.0,
-            "error": f"template not loaded: {template_key}",
-        }
 
     match = _match_template_region(
         img,
@@ -961,18 +955,55 @@ def _template_path_for_key(template_key: str) -> Optional[str]:
     return None
 
 
-def _get_template(template_key: str) -> Optional[np.ndarray]:
+def _template_load_error(
+    template_key: Optional[str] = None,
+    template_path: Optional[str] = None,
+) -> dict:
+    target = template_key or template_path or "unknown"
+    detail = f"template load failed: {target}"
+    if template_key and template_path:
+        detail += f" ({template_path})"
+    result = {"errorCode": "template_load_failed", "error": detail}
+    if template_key is not None:
+        result["templateKey"] = template_key
+    if template_path is not None:
+        result["templatePath"] = template_path
+    return result
+
+
+class TemplateLoadError(RuntimeError):
+    """A template required by the current runtime request cannot be loaded."""
+
+    def __init__(self, template_key: Optional[str] = None, template_path: Optional[str] = None):
+        self.response = _template_load_error(template_key, template_path)
+        super().__init__(self.response["error"])
+
+
+def _read_template_image(
+    path: str,
+    flags: int = cv2.IMREAD_UNCHANGED,
+    template_key: Optional[str] = None,
+) -> np.ndarray:
+    """Read a selected template. Missing/corrupt templates always fail."""
+    image = read_image(path, flags)
+    if image is None:
+        raise TemplateLoadError(template_key, path)
+    return image
+
+
+def _available_template_key(*keys: str) -> str:
+    """Resolve an explicitly supported alias before loading the selected key."""
+    return next((key for key in keys if key in templates or _template_path_for_key(key)), keys[0])
+
+
+def _get_template(template_key: str) -> np.ndarray:
     tmpl = templates.get(template_key)
     if tmpl is not None:
         return tmpl
-    if "/" not in template_key and "\\" not in template_key:
-        return None
     path = _template_path_for_key(template_key)
-    if not path or not os.path.isfile(path):
-        return None
-    gray, mask = _read_template_png(path)
-    if gray is None:
-        return None
+    if path is None:
+        raise TemplateLoadError(template_key)
+    gray, mask = _read_template_png(path, template_key)
     templates[template_key] = gray
     if mask is not None:
         template_masks[template_key] = mask
@@ -1049,9 +1080,7 @@ def _detect_item_grid_anchors(
     gray_threshold: float,
     template_reference_width: Optional[float] = None,
 ) -> tuple[list[dict], Optional[str]]:
-    tmpl = templates.get(anchor_template_key)
-    if tmpl is None:
-        return [], f"template not loaded: {anchor_template_key}"
+    tmpl = _get_template(anchor_template_key)
 
     h, w = img.shape[:2]
     rx = max(0, int(round(region["x"] * w)))
@@ -1722,23 +1751,7 @@ def _find_enhancement_servant_grid(img: np.ndarray, cmd: dict) -> dict:
     best: Optional[dict] = None
     if not grid_fail_reason and template_paths:
         for template_path in template_paths:
-            raw = read_image(template_path, cv2.IMREAD_GRAYSCALE)
-            if raw is None:
-                matches.append(
-                    {
-                        "template": os.path.basename(template_path),
-                        "templatePath": template_path,
-                        "row": None,
-                        "col": None,
-                        "found": False,
-                        "score": 0.0,
-                        "x": 0.0,
-                        "y": 0.0,
-                        "region": None,
-                        "error": "failed to read template",
-                    }
-                )
-                continue
+            raw = _read_template_image(template_path, cv2.IMREAD_GRAYSCALE)
             tmpl = _resize_template(raw, template_size)
             tmpl = _crop_template(tmpl, template_crop)
             for cell in cells:
@@ -1806,8 +1819,6 @@ def _find_element(
     template_reference_width: Optional[float] = None,
 ) -> dict:
     tmpl = _get_template(template_key)
-    if tmpl is None:
-        return {"found": False, "error": f"template not loaded: {template_key}"}
     result = _match_template_region(
         img,
         tmpl,
@@ -1832,8 +1843,6 @@ def _find_all_template_matches(
 ) -> list[dict]:
     """Return vertically distinct matches for one static UI label."""
     tmpl = _get_template(template_key)
-    if tmpl is None:
-        return []
     tmpl = _scale_static_template_for_image(tmpl, img, template_key)
     h, w = img.shape[:2]
     rx = max(0, int(round(float(region["x"]) * w)))
@@ -2047,11 +2056,6 @@ def _find_element_by_name(
         return {"found": False, "error": "element missing 'template'"}
     if element.get("masked"):
         tmpl = _get_template(template_key)
-        if tmpl is None:
-            return {
-                "found": False,
-                "error": f"template not loaded: {template_key}",
-            }
         return _score_template_region(
             img,
             tmpl,
@@ -2075,11 +2079,16 @@ def _find_element_by_name(
 # ---------------------------------------------------------------------------
 
 
-def _detect_screen(img: np.ndarray) -> dict:
+def _detect_screen(
+    img: np.ndarray,
+    screen_names: Optional[list[str]] = None,
+) -> dict:
     best_name = "Unknown"
     best_score = 0.0
     best_priority = 0
     for screen_name, spec in config.get("screens", {}).items():
+        if screen_names is not None and screen_name not in screen_names:
+            continue
         det = spec.get("detect")
         if not det:
             continue
@@ -2096,8 +2105,6 @@ def _detect_screen(img: np.ndarray) -> dict:
                     continue
                 key = str(option["template"])
                 tmpl = _get_template(key)
-                if tmpl is None:
-                    continue
                 if option.get("masked"):
                     result = _score_template_region(
                         img,
@@ -2136,9 +2143,6 @@ def _detect_screen(img: np.ndarray) -> dict:
                     required_scores = []
                     break
                 tmpl = _get_template(str(key))
-                if tmpl is None:
-                    required_scores = []
-                    break
                 result = _match_template_region(
                     img,
                     tmpl,
@@ -2167,8 +2171,6 @@ def _detect_screen(img: np.ndarray) -> dict:
             screen_score = 0.0
             for key in keys:
                 tmpl = _get_template(key)
-                if tmpl is None:
-                    continue
                 result = _match_template_region(
                     img,
                     tmpl,
@@ -2242,9 +2244,6 @@ def _load_digit_template_masks(prefix: str, suffix: str) -> tuple[list[tuple[int
     missing: list[int] = []
     for digit in range(10):
         tmpl = _get_template(_digit_template_key(digit, prefix, suffix))
-        if tmpl is None:
-            missing.append(digit)
-            continue
         _, mask = cv2.threshold(tmpl, 10, 255, cv2.THRESH_BINARY)
         if mask.size == 0:
             missing.append(digit)
@@ -2760,9 +2759,6 @@ def _read_bond_level_up(img: np.ndarray, debug: bool = False) -> dict:
     anchor_cfg = read.get("anchor") or {}
     anchor_key = str(anchor_cfg.get("template", ""))
     anchor_tmpl = _get_template(anchor_key)
-    if anchor_tmpl is None:
-        diag["failReason"] = "anchor_template_not_loaded"
-        return {"ok": False, "reason": diag["failReason"], **({"diagnostics": diag} if debug else {})}
     anchor = _match_template_region_multiscale(
         img,
         anchor_tmpl,
@@ -2850,23 +2846,17 @@ def _read_bond_level_up(img: np.ndarray, debug: bool = False) -> dict:
 
 def _load_crit_digit_templates(
     prefix: str, suffix: str
-) -> Optional[list[tuple[int, np.ndarray, Optional[np.ndarray]]]]:
-    """Load all 10 crit-digit templates with their alpha-derived masks.
-
-    Returns ``None`` if any digit template is missing — callers should treat
-    that as "crit detection unavailable" rather than as a 0-confidence read.
-    """
+) -> list[tuple[int, np.ndarray, Optional[np.ndarray]]]:
+    """Load all 10 required crit-digit templates with their alpha masks."""
     refs: list[tuple[int, np.ndarray, Optional[np.ndarray]]] = []
     for digit in range(10):
         key = _digit_template_key(digit, prefix, suffix)
         tmpl = _get_template(key)
-        if tmpl is None:
-            return None
         mask: Optional[np.ndarray] = None
         path = _template_path_for_key(key)
         if path:
-            raw = read_image(path, cv2.IMREAD_UNCHANGED)
-            if raw is not None and raw.ndim == 3 and raw.shape[2] == 4:
+            raw = _read_template_image(path, cv2.IMREAD_UNCHANGED)
+            if raw.ndim == 3 and raw.shape[2] == 4:
                 mask = (raw[:, :, 3] > 32).astype(np.uint8) * 255
         refs.append((digit, tmpl, mask))
     return refs
@@ -2955,8 +2945,6 @@ def _read_crit_digits(
     if len(slot_regions) != 3:
         return None, empty_reads
     template_refs = _load_crit_digit_templates(prefix, suffix)
-    if template_refs is None:
-        return None, empty_reads
 
     reads: list[dict] = []
     kept_digits: list[Optional[int]] = []
@@ -3042,13 +3030,8 @@ def _read_battle_scene_legacy(
         return _wrap(None, None, fail="empty_region")
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
 
-    label_key = "battle/text_battle_label"
+    label_key = _available_template_key("battle/text_battle_label", "text_battle_label")
     label = _get_template(label_key)
-    if label is None:
-        label_key = "text_battle_label"
-        label = templates.get("text_battle_label")
-    if label is None:
-        return _wrap(None, None, fail="missing_label_template")
     diag["labelTemplateLoaded"] = True
     label = _scale_static_template_for_image(label, img, label_key)
 
@@ -3080,15 +3063,8 @@ def _read_battle_scene_legacy(
     cands: list[tuple[int, int, float, int, int, int]] = []
     # (x, digit, score, w, h, y)
     for d in range(10):
-        template_key = f"digit/digit_{d}"
-        tmpl = templates.get(template_key)
-        if tmpl is None:
-            # Lightweight test fixtures still expose the legacy flat keys.
-            template_key = f"digit_{d}"
-            tmpl = templates.get(template_key)
-        if tmpl is None:
-            diag["missingDigitTemplates"].append(d)
-            continue
+        template_key = _available_template_key(f"digit/digit_{d}", f"digit_{d}")
+        tmpl = _get_template(template_key)
         tmpl = _scale_static_template_for_image(tmpl, img, template_key)
         th, tw = tmpl.shape[:2]
         if tw > strip.shape[1] or th > strip.shape[0]:
@@ -3508,10 +3484,8 @@ def _ensure_icon_color_sigs(templates_dir_hint: Optional[str] = None) -> None:
                 path = cand
                 break
         if path is None:
-            continue
-        raw = read_image(path, cv2.IMREAD_UNCHANGED)
-        if raw is None:
-            continue
+            raise TemplateLoadError(f"shared/battle/command_icon_{suit}")
+        raw = _read_template_image(path, cv2.IMREAD_UNCHANGED)
         if raw.ndim == 3 and raw.shape[2] == 4:
             bgr = raw[:, :, :3]
             opaque = raw[:, :, 3] > 128
@@ -3545,7 +3519,7 @@ def _load_face_template_pair(
     target_w: int,
     crop_y0_rel: float = 0.0,
     crop_y1_rel: float = FACE_CROP_REL_H,
-) -> Optional[tuple[np.ndarray, Optional[np.ndarray]]]:
+) -> tuple[np.ndarray, Optional[np.ndarray]]:
     """Load, top-crop, and grayscale-resize a servant face PNG plus mask.
 
     The template is cropped vertically by ``crop_y0_rel..crop_y1_rel`` of
@@ -3561,9 +3535,7 @@ def _load_face_template_pair(
     if cached is not None:
         return cached
 
-    img = read_image(path, cv2.IMREAD_UNCHANGED)
-    if img is None:
-        return None
+    img = _read_template_image(path, cv2.IMREAD_UNCHANGED)
     if img.ndim == 3 and img.shape[2] == 4:
         gray = cv2.cvtColor(img[:, :, :3], cv2.COLOR_BGR2GRAY)
         mask: Optional[np.ndarray] = img[:, :, 3]
@@ -3595,15 +3567,13 @@ def _load_face_template_pair(
     return gray, mask
 
 
-def _load_face_template(path: str, target_w: int) -> Optional[np.ndarray]:
+def _load_face_template(path: str, target_w: int) -> np.ndarray:
     """Load, top-crop, and grayscale-resize a servant face PNG.
 
     Kept as a thin compatibility wrapper for tests and callers that only
     need the grayscale template.
     """
     pair = _load_face_template_pair(path, target_w)
-    if pair is None:
-        return None
     gray, _ = pair
     return gray
 
@@ -3815,8 +3785,6 @@ def _command_card_is_stunned(
     """Whether any shared unable-to-act marker appears in ``region``."""
     for template_key in COMMAND_CARD_STUN_TEMPLATE_KEYS:
         tmpl = _get_template(template_key)
-        if tmpl is None:
-            continue
         if _score_template_region(
             img,
             tmpl,
@@ -3877,8 +3845,6 @@ def _identify_servant_in_slot(
         for sid in servant_ids:
             for path in _list_servant_face_files(assets_dir, sid):
                 pair = _load_face_template_pair(path, target_w, crop_y0_rel, crop_y1_rel)
-                if pair is None:
-                    continue
                 tmpl, mask = pair
                 if tmpl.shape[0] > roi.shape[0] or tmpl.shape[1] > roi.shape[1]:
                     continue
@@ -4118,8 +4084,6 @@ def _np_gauge_hundreds_slot_visible_legacy(img: np.ndarray, region: dict) -> boo
         return False
 
     template_refs = _load_crit_digit_templates("digit/digit_", "")
-    if template_refs is None:
-        return True
 
     digit, score = _best_crit_digit_in_region(img, region, template_refs)
     return (
@@ -5629,8 +5593,6 @@ def _pick_confirm_button_anchor_for_row(
 def _support_find_confirm_button_template_anchors(img: np.ndarray) -> list[dict]:
     """Locate the right-side "助战编队确认" buttons by template match."""
     tmpl = _get_template(SUPPORT_CONFIRM_BUTTON_TEMPLATE)
-    if tmpl is None:
-        return []
     h, w = img.shape[:2]
     if h == 0 or w == 0:
         return []
@@ -5825,14 +5787,12 @@ def _support_find_row_anchors(img: np.ndarray) -> list[dict]:
 
 def _support_grand_badge_scores_per_anchor(
     img: np.ndarray, button_anchors: list[dict]
-) -> Optional[list[Optional[float]]]:
+) -> list[Optional[float]]:
     """Per-anchor "冠位从者" ribbon match scores, aligned 1-1 with
     ``button_anchors``.
 
-    Returns ``None`` when the active server bundle ships *zero*
-    variants of the ribbon template (so callers can treat that as
-    "no probe available" instead of "no Grand visible"). Otherwise
-    returns a list with one entry per anchor:
+    All declared ribbon templates are required. Returns a list with
+    one entry per anchor:
 
     - ``float`` (max TM_CCOEFF_NORMED score across all ribbon
       variants within the per-anchor ROI) when the probe ran.
@@ -5858,16 +5818,11 @@ def _support_grand_badge_scores_per_anchor(
     (``SUPPORT_GRAND_BADGE_W`` × ``SUPPORT_GRAND_BADGE_H``) in *this
     frame's* pixel grid before matching. See ``AGENTS.md``.
     """
-    raw_variants = [
-        templates.get(name) for name in SUPPORT_GRAND_BADGE_TEMPLATES
-    ]
-    variants = [t for t in raw_variants if t is not None]
-    if not variants:
-        return None
     h, w = img.shape[:2]
     scores: list[Optional[float]] = [None] * len(button_anchors)
     if h == 0 or w == 0 or not button_anchors:
         return scores
+    variants = [_get_template(name) for name in SUPPORT_GRAND_BADGE_TEMPLATES]
     target_tw = max(1, int(round(SUPPORT_GRAND_BADGE_W * w)))
     target_th = max(1, int(round(SUPPORT_GRAND_BADGE_H * h)))
     if target_tw <= 1 or target_th <= 1:
@@ -5926,8 +5881,8 @@ def _support_grand_section_visible_from_scores(
     scores: Optional[list[Optional[float]]],
 ) -> Optional[bool]:
     """Aggregate the per-anchor scores into the runner's "is the Grand
-    section still on screen?" bool. ``None`` flows through (template
-    missing). When the template is loaded but no anchor cleared the
+    section still on screen?" bool. ``None`` flows through when no
+    probe result was supplied. When no anchor cleared the
     threshold, returns ``False`` — that's the runner's "section
     exhausted" signal and is what lets it stop scrolling early."""
     if scores is None:
@@ -6152,8 +6107,6 @@ def _support_level_template_refs() -> list[tuple[int, np.ndarray]]:
     refs: list[tuple[int, np.ndarray]] = []
     for digit in range(1, 10):
         tmpl = _get_template(_digit_template_key(digit, "digit/digit_", ""))
-        if tmpl is None:
-            continue
         _, mask = cv2.threshold(tmpl, 180, 255, cv2.THRESH_BINARY)
         refs.append((digit, mask))
     return refs
@@ -6163,8 +6116,6 @@ def _support_dedicated_level_template_refs() -> list[tuple[int, np.ndarray]]:
     refs: list[tuple[int, np.ndarray]] = []
     for level in range(1, 10):
         tmpl = _get_template(f"digit-type-3/{level}")
-        if tmpl is None:
-            continue
         if len(tmpl.shape) == 3:
             tmpl = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
         _, mask = cv2.threshold(tmpl, 180, 255, cv2.THRESH_BINARY)
@@ -6174,8 +6125,6 @@ def _support_dedicated_level_template_refs() -> list[tuple[int, np.ndarray]]:
 
 def _support_dedicated_digit_template(digit: int) -> Optional[np.ndarray]:
     tmpl = _get_template(f"digit-type-3/{digit}")
-    if tmpl is None:
-        return None
     if len(tmpl.shape) == 3:
         tmpl = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
     _, mask = cv2.threshold(tmpl, 180, 255, cv2.THRESH_BINARY)
@@ -6184,8 +6133,6 @@ def _support_dedicated_digit_template(digit: int) -> Optional[np.ndarray]:
 
 def _support_digit_template_mask(digit: int) -> Optional[np.ndarray]:
     tmpl = _get_template(_digit_template_key(digit, "digit/digit_", ""))
-    if tmpl is None:
-        return None
     _, mask = cv2.threshold(tmpl, 180, 255, cv2.THRESH_BINARY)
     return mask
 
@@ -6483,7 +6430,7 @@ BOND_CE_ARTWORK_THRESHOLD = 0.65
 
 def _load_ce_template(
     path: str, target_w: int, target_h: int
-) -> Optional[np.ndarray]:
+) -> np.ndarray:
     """Load a CE icon template, drop alpha, grayscale, trim the framed
     top/bottom + right strips, and resize to **exactly** ``target_w`` x
     ``target_h`` (no aspect-ratio preservation — both axes are forced so
@@ -6495,9 +6442,7 @@ def _load_ce_template(
     if cached is not None:
         return cached
 
-    raw = read_image(path, cv2.IMREAD_UNCHANGED)
-    if raw is None:
-        return None
+    raw = _read_template_image(path, cv2.IMREAD_UNCHANGED)
     if raw.ndim == 3 and raw.shape[2] == 4:
         bgr = raw[:, :, :3]
         alpha = raw[:, :, 3:4].astype(np.float32) / 255.0
@@ -6592,9 +6537,9 @@ def _verify_support_ce(
     region in grayscale, resize the template to the crop's width, and
     take ``max(matchTemplate)`` with ``TM_CCOEFF_NORMED``.
 
-    Returns ``{"score": float, "passed": bool}``. A missing template or
-    empty crop yields ``score=0.0, passed=False`` so callers can treat
-    "couldn't read the icon" the same as "didn't match".
+    Returns ``{"score": float, "passed": bool}``. An empty crop yields
+    ``score=0.0, passed=False``. An unreadable template raises
+    ``TemplateLoadError``.
     """
     h, w = img.shape[:2]
     if h == 0 or w == 0:
@@ -6636,13 +6581,6 @@ def _verify_support_ce(
     target_w = max(8, int(round(CE_ICON_W_FRAC * w)))
     target_h = max(8, int(round(CE_ICON_H_FRAC * h)))
     tmpl = _load_ce_template(template_path, target_w, target_h)
-    if tmpl is None:
-        return {
-            "score": 0.0,
-            "passed": False,
-            "error": "template not readable",
-            "iconChecks": [],
-        }
 
     # Relax the base artwork threshold for bond slots only; see the
     # ``BOND_CE_ARTWORK_THRESHOLD`` comment for the rationale. Take the
@@ -6837,16 +6775,6 @@ def _verify_ce_decoration_icon(
     }
     abs_region = _clamp_norm_rect(abs_region)
     tmpl = _get_template(template_key)
-    if tmpl is None:
-        return {
-            "kind": kind,
-            "templateKey": template_key,
-            "region": abs_region,
-            "score": 0.0,
-            "passed": False,
-            "threshold": threshold,
-            "error": "template not loaded",
-        }
     match = _score_template_region(
         img,
         tmpl,
@@ -6885,7 +6813,7 @@ def _load_templates(directory: str, append: bool = False, key_prefix: str = "") 
         _icon_color_sig.clear()
     count = 0
     if not os.path.isdir(directory):
-        return {"ok": False, "error": f"directory not found: {directory}"}
+        raise TemplateLoadError(template_path=directory)
     directory = os.path.abspath(directory)
     for root, _, files in os.walk(directory):
         for fname in files:
@@ -6894,9 +6822,7 @@ def _load_templates(directory: str, append: bool = False, key_prefix: str = "") 
             path = os.path.join(root, fname)
             relative = os.path.relpath(path, directory).replace(os.sep, "/")
             key = f"{key_prefix}{os.path.splitext(relative)[0]}"
-            gray, mask = _read_template_png(path)
-            if gray is None:
-                continue
+            gray, mask = _read_template_png(path, key)
             templates[key] = gray
             if mask is not None:
                 template_masks[key] = mask
@@ -6917,8 +6843,8 @@ def _load_templates(directory: str, append: bool = False, key_prefix: str = "") 
 
 
 def _read_template_png(
-    path: str,
-) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    path: str, template_key: Optional[str] = None,
+) -> tuple[np.ndarray, Optional[np.ndarray]]:
     """Load a template PNG into a (grayscale, alpha_mask) pair.
 
     The mask is returned only when the PNG's alpha channel has at least one
@@ -6930,13 +6856,11 @@ def _read_template_png(
     otherwise be baked into the template and dragged the score down for any
     on-screen instance whose surroundings were not also black).
     """
-    raw = read_image(path, cv2.IMREAD_UNCHANGED)
-    if raw is None:
-        return None, None
+    raw = _read_template_image(path, cv2.IMREAD_UNCHANGED, template_key)
     if raw.ndim == 2:
         return raw, None
     if raw.ndim != 3:
-        return None, None
+        raise TemplateLoadError(template_key, path)
     if raw.shape[2] == 4:
         bgr = raw[:, :, :3]
         alpha = raw[:, :, 3]
@@ -6945,7 +6869,7 @@ def _read_template_png(
         return gray, mask
     if raw.shape[2] == 3:
         return cv2.cvtColor(raw, cv2.COLOR_BGR2GRAY), None
-    return None, None
+    raise TemplateLoadError(template_key, path)
 
 
 def _deep_merge_dict(base: dict, override: dict) -> dict:
@@ -7134,12 +7058,10 @@ def _handle_find_region_command(cmd: dict) -> dict:
         return {"found": False, "error": err}
 
     use_alpha_mask = cmd.get("alphaMask") is True
-    raw_tmpl = read_image(
+    raw_tmpl = _read_template_image(
         cmd["templatePath"],
         cv2.IMREAD_UNCHANGED if use_alpha_mask else cv2.IMREAD_GRAYSCALE,
     )
-    if raw_tmpl is None:
-        return {"found": False, "error": "failed to read template"}
 
     alpha_mask = None
     if use_alpha_mask and len(raw_tmpl.shape) == 3 and raw_tmpl.shape[2] == 4:
@@ -7201,6 +7123,14 @@ def _handle_find_region_command(cmd: dict) -> dict:
     )
 
 
+@contextmanager
+def _template_request(cmd: dict):
+    try:
+        yield
+    except TemplateLoadError as exc:
+        _reply(cmd.get("id"), exc.response)
+
+
 def _main_repl() -> None:
     for line in sys.stdin:
         line = line.strip()
@@ -7213,333 +7143,336 @@ def _main_repl() -> None:
             _respond({"error": f"invalid JSON: {exc}"})
             continue
 
-        req_id = cmd.get("id")
-        action = cmd.get("cmd")
+        with _template_request(cmd):
+            req_id = cmd.get("id")
+            action = cmd.get("cmd")
 
-        if action == "quit":
-            if stream is not None:
-                try:
-                    stream.stop()
-                except Exception:  # noqa: BLE001
-                    pass
-            break
-        elif action == "ping":
-            _reply(req_id, {"ok": True})
-        elif action == "load_templates":
-            _reply(
-                req_id,
-                _load_templates(
-                    cmd["dir"],
-                    bool(cmd.get("append", False)),
-                    str(cmd.get("keyPrefix", "")),
-                ),
-            )
-        elif action == "load_config":
-            _reply(req_id, _load_config(cmd["path"], bool(cmd.get("merge", False))))
-        elif action == "set_server":
-            _reply(req_id, _set_server(str(cmd.get("server", ""))))
-        elif action == "set_digit_recognition_mode":
-            _reply(req_id, _set_digit_recognition_mode(str(cmd.get("mode", ""))))
-        elif action == "set_sequence_recognition_mode":
-            _reply(req_id, _set_sequence_recognition_mode(str(cmd.get("mode", ""))))
-        elif action == "start_stream":
-            _reply(req_id, _start_stream(cmd))
-        elif action == "stop_stream":
-            _reply(req_id, _stop_stream())
-        elif action == "release_ocr":
-            _reply(req_id, _release_ocr())
-        elif action == "get_frame":
-            _reply(req_id, _get_frame(cmd))
-        elif action == "detect":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(req_id, {"screen": "Unknown", "score": 0.0, "error": err})
-            else:
-                _reply(req_id, _detect_screen(img))
-        elif action == "find_element":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(req_id, {"found": False, "error": err})
-            else:
+            if action == "quit":
+                if stream is not None:
+                    try:
+                        stream.stop()
+                    except Exception:  # noqa: BLE001
+                        pass
+                break
+            elif action == "ping":
+                _reply(req_id, {"ok": True})
+            elif action == "load_templates":
                 _reply(
                     req_id,
-                    _find_element(
-                        img,
-                        cmd["templateKey"],
-                        cmd.get("region", DEFAULT_REGION),
-                        cmd.get("threshold", 0.8),
-                        bool(cmd.get("requireApRecoveryEnabled", False)),
-                        cmd.get("templateReferenceWidth"),
+                    _load_templates(
+                        cmd["dir"],
+                        bool(cmd.get("append", False)),
+                        str(cmd.get("keyPrefix", "")),
                     ),
                 )
-        elif action == "find_element_by_name":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(req_id, {"found": False, "error": err})
-            else:
-                _reply(
-                    req_id,
-                    _find_element_by_name(
-                        img,
-                        cmd["screen"],
-                        cmd["element"],
-                    ),
-                )
-        elif action == "find_rank_up_quest_rows":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(
-                    req_id,
-                    {
-                        "rows": [],
-                        "diagnostics": {
-                            "rankUpAnchorCount": 0,
-                            "costAnchorCount": 0,
-                            "pairedRowCount": 0,
-                        },
-                        "error": err,
-                    },
-                )
-            else:
-                _reply(req_id, _find_rank_up_quest_rows(img))
-        elif action == "read_region_luma":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(
-                    req_id,
-                    {
-                        "ok": False,
-                        "meanLuma": 0.0,
-                        "meanSaturation": 0.0,
-                        "meanValue": 0.0,
-                        "error": err,
-                    },
-                )
-            else:
-                _reply(req_id, _read_region_luma(img, cmd.get("region", DEFAULT_REGION)))
-        elif action == "probe_order_change_selection":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(
-                    req_id,
-                    {
-                        "ok": False,
-                        "selected": False,
-                        "brightCount": 0,
-                        "sampleLumas": [],
-                        "error": err,
-                    },
-                )
-            else:
-                _reply(
-                    req_id,
-                    _probe_order_change_selection(
-                        img,
-                        float(cmd["slotX"]),
-                        float(cmd.get("slotY", ORDER_CHANGE_SELECTION_POINT_Y)),
-                        cmd.get("server"),
-                    ),
-                )
-        elif action == "probe_skill_use_dialog":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(req_id, {"found": False, "score": 0.0, "meanLuma": 0.0, "error": err})
-            else:
-                _reply(
-                    req_id,
-                    _probe_skill_use_dialog(
-                        img,
-                        cmd["templateKey"],
-                        cmd.get("dialogRegion", DEFAULT_REGION),
-                        float(cmd.get("dialogThreshold", 0.8)),
-                        cmd.get("confirmRegion", DEFAULT_REGION),
-                    ),
-                )
-        elif action == "read_battle_scene":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(req_id, {"scene": None, "total": None, "error": err})
-            else:
-                _reply(
-                    req_id,
-                    _read_battle_scene(
-                        img,
-                        cmd.get("region", DEFAULT_REGION),
-                        debug=bool(cmd.get("debug", False)),
-                    ),
-                )
-        elif action == "find_command_cards":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(req_id, {"cards": [], "error": err})
-            else:
-                regions = cmd.get("cardRegions")
-                if not regions:
-                    regions = list(DEFAULT_COMMAND_CARD_SLOTS)
-                _reply(
-                    req_id,
-                    _find_command_cards(
-                        img,
-                        regions,
-                        [int(s) for s in cmd.get("servantIds", []) if s is not None],
-                        cmd.get("assetsDir"),
-                        float(cmd.get("faceThreshold", 0.5)),
-                    ),
-                )
-        elif action == "find_noble_phantasms":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(req_id, {"slots": [], "error": err})
-            else:
-                regions = cmd.get("npRegions")
-                if not regions:
-                    regions = list(DEFAULT_NP_CARD_SLOTS)
-                gauge_regions = cmd.get("npGaugeRegions")
-                _reply(
-                    req_id,
-                    _find_noble_phantasms(
-                        img,
-                        regions,
-                        gauge_regions,
-                        bool(cmd.get("includeDigitModelDebug", False)),
-                        bool(cmd.get("includeSequenceRecognition", False)),
-                    ),
-                )
-        elif action == "find_supports":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(
-                    req_id,
-                    {
-                        "supports": [],
-                        "diagnostics": {
-                            "listRegion": SUPPORT_LIST_REGION,
-                            "nameCandidates": [],
-                            "npCandidates": [],
-                            "fragmentCount": 0,
-                            "fragments": [],
-                            "nameOnlyFallback": False,
-                            "nameOnlyReason": "",
-                            "requireNpMatch": bool(cmd.get("requireNpMatch", False)),
-                            **_support_diagnostics_meta(),
-                        },
-                        "error": err,
-                    },
-                )
-            else:
-                _reply(
-                    req_id,
-                    _find_supports(
-                        img,
-                        cmd.get("listRegion") or SUPPORT_LIST_REGION,
-                        str(cmd.get("expectedName", "")),
-                        [str(n) for n in cmd.get("expectedNpNames", []) if n],
-                        float(cmd.get("nameThreshold", SUPPORT_NAME_THRESHOLD)),
-                        float(cmd.get("npThreshold", SUPPORT_NP_THRESHOLD)),
-                        float(cmd.get("pairDy", SUPPORT_ROW_PAIR_DY)),
-                        bool(cmd.get("includeSupportDetails", False)),
-                        [str(n) for n in (cmd.get("expectedNames") or []) if n],
-                        [str(n) for n in (cmd.get("excludedNames") or []) if n],
-                        bool(cmd.get("requireNpMatch", False)),
-                        bool(cmd.get("supportFullListOcrFallback", False)),
-                        False,
-                        bool(cmd.get("matchAnyServant", False)),
-                    ),
-                )
-        elif action == "ocr_region":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(req_id, {"fragments": [], "fullText": "", "error": err})
-            else:
-                _reply(req_id, _ocr_region(img, cmd.get("region", DEFAULT_REGION)))
-        elif action == "read_bond_level_up":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(req_id, {"ok": False, "reason": "frame_unavailable", "error": err})
-            else:
-                _reply(req_id, _read_bond_level_up(img, bool(cmd.get("debug", False))))
-        elif action == "read_level_digits":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(req_id, {"found": False, "current": None, "max": None, "text": "", "error": err})
-            else:
-                _reply(
-                    req_id,
-                    _read_level_digits(
-                        img,
-                        cmd.get("region", DEFAULT_REGION),
-                        bool(cmd.get("debug", False)),
-                        prefix=str(cmd.get("templatePrefix", LEVEL_DIGIT_TEMPLATE_PREFIX)),
-                        suffix=str(cmd.get("templateSuffix", LEVEL_DIGIT_TEMPLATE_SUFFIX)),
-                        bright_threshold=int(cmd.get("brightThreshold", LEVEL_DIGIT_BRIGHT_THRESHOLD)),
-                        min_score=float(cmd.get("minScore", LEVEL_DIGIT_MIN_SCORE)),
-                    ),
-                )
-        elif action == "verify_support_ce":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(req_id, {"score": 0.0, "passed": False, "error": err})
-                continue
-            template_path = cmd.get("templatePath")
-            if not template_path:
-                _reply(
-                    req_id,
-                    {"score": 0.0, "passed": False, "error": "missing 'templatePath'"},
-                )
-                continue
-            _reply(
-                req_id,
-                _verify_support_ce(
-                    img,
-                    cmd.get("region", DEFAULT_REGION),
-                    template_path,
-                    float(cmd.get("threshold", 0.7)),
-                    bool(cmd.get("mlbRequired", False)),
-                    cmd.get("grandBondCeMode"),
-                    float(cmd.get("fullGateThreshold", CE_OCCLUSION_SAFE_MIN_FULL_SCORE)),
-                    float(cmd.get("mlbIconThreshold", CE_DECORATION_ICON_THRESHOLD)),
-                    float(cmd.get("bondIconThreshold", CE_DECORATION_ICON_THRESHOLD)),
-                ),
-            )
-        elif action == "find_region":
-            _reply(req_id, _handle_find_region_command(cmd))
-        elif action in (
-            "find_item_grid",
-            "find_enhancement_servant_grid",
-            "read_craft_essence_grid",
-        ):
-            deadline = time.monotonic() + float(cmd.get("retrySeconds", 0.0))
-            interval = float(cmd.get("retryIntervalSeconds", 0.15))
-            attempts = 0
-            last_result: Optional[dict] = None
-            while True:
+            elif action == "load_config":
+                _reply(req_id, _load_config(cmd["path"], bool(cmd.get("merge", False))))
+            elif action == "set_server":
+                _reply(req_id, _set_server(str(cmd.get("server", ""))))
+            elif action == "set_digit_recognition_mode":
+                _reply(req_id, _set_digit_recognition_mode(str(cmd.get("mode", ""))))
+            elif action == "set_sequence_recognition_mode":
+                _reply(req_id, _set_sequence_recognition_mode(str(cmd.get("mode", ""))))
+            elif action == "start_stream":
+                _reply(req_id, _start_stream(cmd))
+            elif action == "stop_stream":
+                _reply(req_id, _stop_stream())
+            elif action == "release_ocr":
+                _reply(req_id, _release_ocr())
+            elif action == "get_frame":
+                _reply(req_id, _get_frame(cmd))
+            elif action == "detect":
                 img, err = _load_frame(cmd)
-                attempts += 1
+                if img is None:
+                    _reply(req_id, {"screen": "Unknown", "score": 0.0, "error": err})
+                else:
+                    _reply(req_id, _detect_screen(
+                        img, cmd.get("screenNames")
+                    ))
+            elif action == "find_element":
+                img, err = _load_frame(cmd)
                 if img is None:
                     _reply(req_id, {"found": False, "error": err})
-                    break
-                if action == "find_item_grid":
-                    last_result = _find_item_grid(img, cmd)
-                elif action == "read_craft_essence_grid":
-                    last_result = _read_craft_essence_grid(img, cmd)
                 else:
-                    last_result = _find_enhancement_servant_grid(img, cmd)
-                last_result["diagnostics"]["attempts"] = attempts
-                if last_result["diagnostics"].get("anchorCount", 0) > 0:
-                    _reply(req_id, last_result)
-                    break
-                if "imagePath" in cmd or time.monotonic() >= deadline:
-                    _reply(req_id, last_result)
-                    break
-                time.sleep(max(0.02, interval))
-        elif action == "read_craft_essence_main_target":
-            img, err = _load_frame(cmd)
-            if img is None:
-                _reply(req_id, {"found": False, "error": err})
-                continue
-            _reply(req_id, _read_craft_essence_main_target(img))
-        else:
-            _reply(req_id, {"error": f"unknown command: {action}"})
+                    _reply(
+                        req_id,
+                        _find_element(
+                            img,
+                            cmd["templateKey"],
+                            cmd.get("region", DEFAULT_REGION),
+                            cmd.get("threshold", 0.8),
+                            bool(cmd.get("requireApRecoveryEnabled", False)),
+                            cmd.get("templateReferenceWidth"),
+                        ),
+                    )
+            elif action == "find_element_by_name":
+                img, err = _load_frame(cmd)
+                if img is None:
+                    _reply(req_id, {"found": False, "error": err})
+                else:
+                    _reply(
+                        req_id,
+                        _find_element_by_name(
+                            img,
+                            cmd["screen"],
+                            cmd["element"],
+                        ),
+                    )
+            elif action == "find_rank_up_quest_rows":
+                img, err = _load_frame(cmd)
+                if img is None:
+                    _reply(
+                        req_id,
+                        {
+                            "rows": [],
+                            "diagnostics": {
+                                "rankUpAnchorCount": 0,
+                                "costAnchorCount": 0,
+                                "pairedRowCount": 0,
+                            },
+                            "error": err,
+                        },
+                    )
+                else:
+                    _reply(req_id, _find_rank_up_quest_rows(img))
+            elif action == "read_region_luma":
+                img, err = _load_frame(cmd)
+                if img is None:
+                    _reply(
+                        req_id,
+                        {
+                            "ok": False,
+                            "meanLuma": 0.0,
+                            "meanSaturation": 0.0,
+                            "meanValue": 0.0,
+                            "error": err,
+                        },
+                    )
+                else:
+                    _reply(req_id, _read_region_luma(img, cmd.get("region", DEFAULT_REGION)))
+            elif action == "probe_order_change_selection":
+                img, err = _load_frame(cmd)
+                if img is None:
+                    _reply(
+                        req_id,
+                        {
+                            "ok": False,
+                            "selected": False,
+                            "brightCount": 0,
+                            "sampleLumas": [],
+                            "error": err,
+                        },
+                    )
+                else:
+                    _reply(
+                        req_id,
+                        _probe_order_change_selection(
+                            img,
+                            float(cmd["slotX"]),
+                            float(cmd.get("slotY", ORDER_CHANGE_SELECTION_POINT_Y)),
+                            cmd.get("server"),
+                        ),
+                    )
+            elif action == "probe_skill_use_dialog":
+                img, err = _load_frame(cmd)
+                if img is None:
+                    _reply(req_id, {"found": False, "score": 0.0, "meanLuma": 0.0, "error": err})
+                else:
+                    _reply(
+                        req_id,
+                        _probe_skill_use_dialog(
+                            img,
+                            cmd["templateKey"],
+                            cmd.get("dialogRegion", DEFAULT_REGION),
+                            float(cmd.get("dialogThreshold", 0.8)),
+                            cmd.get("confirmRegion", DEFAULT_REGION),
+                        ),
+                    )
+            elif action == "read_battle_scene":
+                img, err = _load_frame(cmd)
+                if img is None:
+                    _reply(req_id, {"scene": None, "total": None, "error": err})
+                else:
+                    _reply(
+                        req_id,
+                        _read_battle_scene(
+                            img,
+                            cmd.get("region", DEFAULT_REGION),
+                            debug=bool(cmd.get("debug", False)),
+                        ),
+                    )
+            elif action == "find_command_cards":
+                img, err = _load_frame(cmd)
+                if img is None:
+                    _reply(req_id, {"cards": [], "error": err})
+                else:
+                    regions = cmd.get("cardRegions")
+                    if not regions:
+                        regions = list(DEFAULT_COMMAND_CARD_SLOTS)
+                    _reply(
+                        req_id,
+                        _find_command_cards(
+                            img,
+                            regions,
+                            [int(s) for s in cmd.get("servantIds", []) if s is not None],
+                            cmd.get("assetsDir"),
+                            float(cmd.get("faceThreshold", 0.5)),
+                        ),
+                    )
+            elif action == "find_noble_phantasms":
+                img, err = _load_frame(cmd)
+                if img is None:
+                    _reply(req_id, {"slots": [], "error": err})
+                else:
+                    regions = cmd.get("npRegions")
+                    if not regions:
+                        regions = list(DEFAULT_NP_CARD_SLOTS)
+                    gauge_regions = cmd.get("npGaugeRegions")
+                    _reply(
+                        req_id,
+                        _find_noble_phantasms(
+                            img,
+                            regions,
+                            gauge_regions,
+                            bool(cmd.get("includeDigitModelDebug", False)),
+                            bool(cmd.get("includeSequenceRecognition", False)),
+                        ),
+                    )
+            elif action == "find_supports":
+                img, err = _load_frame(cmd)
+                if img is None:
+                    _reply(
+                        req_id,
+                        {
+                            "supports": [],
+                            "diagnostics": {
+                                "listRegion": SUPPORT_LIST_REGION,
+                                "nameCandidates": [],
+                                "npCandidates": [],
+                                "fragmentCount": 0,
+                                "fragments": [],
+                                "nameOnlyFallback": False,
+                                "nameOnlyReason": "",
+                                "requireNpMatch": bool(cmd.get("requireNpMatch", False)),
+                                **_support_diagnostics_meta(),
+                            },
+                            "error": err,
+                        },
+                    )
+                else:
+                    _reply(
+                        req_id,
+                        _find_supports(
+                            img,
+                            cmd.get("listRegion") or SUPPORT_LIST_REGION,
+                            str(cmd.get("expectedName", "")),
+                            [str(n) for n in cmd.get("expectedNpNames", []) if n],
+                            float(cmd.get("nameThreshold", SUPPORT_NAME_THRESHOLD)),
+                            float(cmd.get("npThreshold", SUPPORT_NP_THRESHOLD)),
+                            float(cmd.get("pairDy", SUPPORT_ROW_PAIR_DY)),
+                            bool(cmd.get("includeSupportDetails", False)),
+                            [str(n) for n in (cmd.get("expectedNames") or []) if n],
+                            [str(n) for n in (cmd.get("excludedNames") or []) if n],
+                            bool(cmd.get("requireNpMatch", False)),
+                            bool(cmd.get("supportFullListOcrFallback", False)),
+                            False,
+                            bool(cmd.get("matchAnyServant", False)),
+                        ),
+                    )
+            elif action == "ocr_region":
+                img, err = _load_frame(cmd)
+                if img is None:
+                    _reply(req_id, {"fragments": [], "fullText": "", "error": err})
+                else:
+                    _reply(req_id, _ocr_region(img, cmd.get("region", DEFAULT_REGION)))
+            elif action == "read_bond_level_up":
+                img, err = _load_frame(cmd)
+                if img is None:
+                    _reply(req_id, {"ok": False, "reason": "frame_unavailable", "error": err})
+                else:
+                    _reply(req_id, _read_bond_level_up(img, bool(cmd.get("debug", False))))
+            elif action == "read_level_digits":
+                img, err = _load_frame(cmd)
+                if img is None:
+                    _reply(req_id, {"found": False, "current": None, "max": None, "text": "", "error": err})
+                else:
+                    _reply(
+                        req_id,
+                        _read_level_digits(
+                            img,
+                            cmd.get("region", DEFAULT_REGION),
+                            bool(cmd.get("debug", False)),
+                            prefix=str(cmd.get("templatePrefix", LEVEL_DIGIT_TEMPLATE_PREFIX)),
+                            suffix=str(cmd.get("templateSuffix", LEVEL_DIGIT_TEMPLATE_SUFFIX)),
+                            bright_threshold=int(cmd.get("brightThreshold", LEVEL_DIGIT_BRIGHT_THRESHOLD)),
+                            min_score=float(cmd.get("minScore", LEVEL_DIGIT_MIN_SCORE)),
+                        ),
+                    )
+            elif action == "verify_support_ce":
+                img, err = _load_frame(cmd)
+                if img is None:
+                    _reply(req_id, {"score": 0.0, "passed": False, "error": err})
+                    continue
+                template_path = cmd.get("templatePath")
+                if not template_path:
+                    _reply(
+                        req_id,
+                        {"score": 0.0, "passed": False, "error": "missing 'templatePath'"},
+                    )
+                    continue
+                _reply(
+                    req_id,
+                    _verify_support_ce(
+                        img,
+                        cmd.get("region", DEFAULT_REGION),
+                        template_path,
+                        float(cmd.get("threshold", 0.7)),
+                        bool(cmd.get("mlbRequired", False)),
+                        cmd.get("grandBondCeMode"),
+                        float(cmd.get("fullGateThreshold", CE_OCCLUSION_SAFE_MIN_FULL_SCORE)),
+                        float(cmd.get("mlbIconThreshold", CE_DECORATION_ICON_THRESHOLD)),
+                        float(cmd.get("bondIconThreshold", CE_DECORATION_ICON_THRESHOLD)),
+                    ),
+                )
+            elif action == "find_region":
+                _reply(req_id, _handle_find_region_command(cmd))
+            elif action in (
+                "find_item_grid",
+                "find_enhancement_servant_grid",
+                "read_craft_essence_grid",
+            ):
+                deadline = time.monotonic() + float(cmd.get("retrySeconds", 0.0))
+                interval = float(cmd.get("retryIntervalSeconds", 0.15))
+                attempts = 0
+                last_result: Optional[dict] = None
+                while True:
+                    img, err = _load_frame(cmd)
+                    attempts += 1
+                    if img is None:
+                        _reply(req_id, {"found": False, "error": err})
+                        break
+                    if action == "find_item_grid":
+                        last_result = _find_item_grid(img, cmd)
+                    elif action == "read_craft_essence_grid":
+                        last_result = _read_craft_essence_grid(img, cmd)
+                    else:
+                        last_result = _find_enhancement_servant_grid(img, cmd)
+                    last_result["diagnostics"]["attempts"] = attempts
+                    if last_result["diagnostics"].get("anchorCount", 0) > 0:
+                        _reply(req_id, last_result)
+                        break
+                    if "imagePath" in cmd or time.monotonic() >= deadline:
+                        _reply(req_id, last_result)
+                        break
+                    time.sleep(max(0.02, interval))
+            elif action == "read_craft_essence_main_target":
+                img, err = _load_frame(cmd)
+                if img is None:
+                    _reply(req_id, {"found": False, "error": err})
+                    continue
+                _reply(req_id, _read_craft_essence_main_target(img))
+            else:
+                _reply(req_id, {"error": f"unknown command: {action}"})
 
 
 def main() -> None:

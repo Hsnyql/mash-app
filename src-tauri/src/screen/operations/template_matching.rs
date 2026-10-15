@@ -11,7 +11,7 @@ impl SidecarClient {
         template_path: &Path,
         region: NormRect,
         threshold: f64,
-    ) -> Result<Option<Point>, String> {
+    ) -> Result<Option<Point>, CvError> {
         let mut req = request(
             SidecarCommand::FindRegion,
             serde_json::json!({
@@ -28,7 +28,7 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|value| value.as_str()) {
-            return Err(format!("find_region({}): {err}", template_path.display()));
+            return Err(format!("find_region({}): {err}", template_path.display()).into());
         }
         if resp["found"].as_bool().unwrap_or(false) {
             let x = resp["x"].as_f64().unwrap_or(0.0);
@@ -48,7 +48,7 @@ impl SidecarClient {
         region: NormRect,
         threshold: f64,
         template_size: (u32, u32),
-    ) -> Result<ElementMatch, String> {
+    ) -> Result<ElementMatch, CvError> {
         let mut req = request(
             SidecarCommand::FindRegion,
             serde_json::json!({
@@ -71,7 +71,8 @@ impl SidecarClient {
             return Err(format!(
                 "find_region_with_template_size({}): {err}",
                 template_path.display()
-            ));
+            )
+            .into());
         }
         let found = resp["found"].as_bool().unwrap_or(false);
         let score = resp["score"].as_f64().unwrap_or(0.0);
@@ -104,7 +105,7 @@ impl SidecarClient {
         template_crop: NormRect,
         template_size: Option<(u32, u32)>,
         threshold: f64,
-    ) -> Result<Option<Point>, String> {
+    ) -> Result<Option<Point>, CvError> {
         let mut req = request(
             SidecarCommand::FindRegion,
             serde_json::json!({
@@ -135,7 +136,7 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|value| value.as_str()) {
-            return Err(format!("find_region({}): {err}", template_path.display()));
+            return Err(format!("find_region({}): {err}", template_path.display()).into());
         }
         if resp["found"].as_bool().unwrap_or(false) {
             let x = resp["x"].as_f64().unwrap_or(0.0);
@@ -157,7 +158,7 @@ impl SidecarClient {
         template_crop: NormRect,
         template_size: Option<(u32, u32)>,
         threshold: f64,
-    ) -> Result<ElementMatch, String> {
+    ) -> Result<ElementMatch, CvError> {
         let mut req = request(
             SidecarCommand::FindRegion,
             serde_json::json!({
@@ -188,7 +189,7 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|value| value.as_str()) {
-            return Err(format!("find_region({}): {err}", template_path.display()));
+            return Err(format!("find_region({}): {err}", template_path.display()).into());
         }
         let found = resp["found"].as_bool().unwrap_or(false);
         let score = resp["score"].as_f64().unwrap_or(0.0);

@@ -12,7 +12,7 @@ impl SidecarClient {
         template_size: Option<(u32, u32)>,
         threshold: f64,
         retry_seconds: f64,
-    ) -> Result<FindEnhancementServantGridResult, String> {
+    ) -> Result<FindEnhancementServantGridResult, CvError> {
         let mut req = request(
             SidecarCommand::FindEnhancementServantGrid,
             serde_json::json!({
@@ -46,10 +46,12 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
-            return Err(err.to_string());
+            return Err(CvError::Other(err.to_string()));
         }
-        serde_json::from_value::<FindEnhancementServantGridResult>(resp)
-            .map_err(|e| format!("invalid find_enhancement_servant_grid response: {e}"))
+        Ok(
+            serde_json::from_value::<FindEnhancementServantGridResult>(resp)
+                .map_err(|e| format!("invalid find_enhancement_servant_grid response: {e}"))?,
+        )
     }
 
     #[allow(dead_code)] // Kept for compatibility with the generic item-grid CV command.
@@ -60,7 +62,7 @@ impl SidecarClient {
         anchor_template_reference_width: f64,
         region: NormRect,
         retry_seconds: f64,
-    ) -> Result<FindItemGridResult, String> {
+    ) -> Result<FindItemGridResult, CvError> {
         let mut req = request(
             SidecarCommand::FindItemGrid,
             serde_json::json!({
@@ -79,10 +81,10 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
-            return Err(err.to_string());
+            return Err(CvError::Other(err.to_string()));
         }
-        serde_json::from_value::<FindItemGridResult>(resp)
-            .map_err(|e| format!("invalid find_item_grid response: {e}"))
+        Ok(serde_json::from_value::<FindItemGridResult>(resp)
+            .map_err(|e| format!("invalid find_item_grid response: {e}"))?)
     }
 
     pub fn read_craft_essence_grid(
@@ -92,7 +94,7 @@ impl SidecarClient {
         anchor_template_reference_width: f64,
         region: NormRect,
         retry_seconds: f64,
-    ) -> Result<ReadCraftEssenceGridResult, String> {
+    ) -> Result<ReadCraftEssenceGridResult, CvError> {
         let mut req = request(
             SidecarCommand::ReadCraftEssenceGrid,
             serde_json::json!({
@@ -111,16 +113,16 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
-            return Err(err.to_string());
+            return Err(CvError::Other(err.to_string()));
         }
-        serde_json::from_value::<ReadCraftEssenceGridResult>(resp)
-            .map_err(|e| format!("invalid read_craft_essence_grid response: {e}"))
+        Ok(serde_json::from_value::<ReadCraftEssenceGridResult>(resp)
+            .map_err(|e| format!("invalid read_craft_essence_grid response: {e}"))?)
     }
 
     pub fn read_craft_essence_main_target(
         &mut self,
         image_path: Option<&Path>,
-    ) -> Result<ReadCraftEssenceMainTargetResult, String> {
+    ) -> Result<ReadCraftEssenceMainTargetResult, CvError> {
         let mut req = request(
             SidecarCommand::ReadCraftEssenceMainTarget,
             serde_json::json!({}),
@@ -128,9 +130,11 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
-            return Err(err.to_string());
+            return Err(CvError::Other(err.to_string()));
         }
-        serde_json::from_value::<ReadCraftEssenceMainTargetResult>(resp)
-            .map_err(|e| format!("invalid read_craft_essence_main_target response: {e}"))
+        Ok(
+            serde_json::from_value::<ReadCraftEssenceMainTargetResult>(resp)
+                .map_err(|e| format!("invalid read_craft_essence_main_target response: {e}"))?,
+        )
     }
 }

@@ -1,6 +1,7 @@
 //! Typed CV operations implemented over the shared sidecar transport.
 
 use super::client::SidecarClient;
+use super::error::CvError;
 use super::protocol::{request, SidecarCommand};
 use super::types::*;
 use std::path::{Path, PathBuf};
@@ -8,15 +9,24 @@ use std::time::Duration;
 
 const RECOVERABLE_OCR_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 
+pub(super) fn parse_detect_response(resp: &serde_json::Value) -> Result<(String, f64), CvError> {
+    if let Some(error) = resp.get("error").and_then(|value| value.as_str()) {
+        return Err(format!("detect: {error}").into());
+    }
+    let screen = resp["screen"].as_str().unwrap_or("Unknown");
+    let score = resp["score"].as_f64().unwrap_or(0.0);
+    Ok((screen.to_string(), score))
+}
+
 impl SidecarClient {
     /// Detect which screen is shown. Pass `None` to use the live scrcpy frame.
-    pub fn detect(&mut self, image_path: Option<&Path>) -> Result<Screen, String> {
+    pub fn detect(&mut self, image_path: Option<&Path>) -> Result<Screen, CvError> {
         let (screen, _) = self.detect_full(image_path)?;
         Ok(screen)
     }
 
     /// Like `detect` but also returns the classifier score.
-    pub fn detect_full(&mut self, image_path: Option<&Path>) -> Result<(Screen, f64), String> {
+    pub fn detect_full(&mut self, image_path: Option<&Path>) -> Result<(Screen, f64), CvError> {
         let (screen_str, score) = self.detect_label_full(image_path)?;
         let screen = screen_str.parse::<Screen>().unwrap_or(Screen::Unknown);
         Ok((screen, score))
@@ -26,13 +36,16 @@ impl SidecarClient {
     pub fn detect_label_full(
         &mut self,
         image_path: Option<&Path>,
-    ) -> Result<(String, f64), String> {
+    ) -> Result<(String, f64), CvError> {
         let mut req = request(SidecarCommand::Detect, serde_json::json!({}))?;
+        // Unscoped debug classification remains best-effort. Automation
+        // supplies its own screen scope and treats missing templates as fatal.
+        if let Some(screens) = &self.detection_screens {
+            req["screenNames"] = serde_json::json!(screens);
+        }
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
-        let screen_str = resp["screen"].as_str().unwrap_or("Unknown");
-        let score = resp["score"].as_f64().unwrap_or(0.0);
-        Ok((screen_str.to_string(), score))
+        parse_detect_response(&resp)
     }
 
     /// Search for a template element within a region. Pass `None` to use the
@@ -43,7 +56,7 @@ impl SidecarClient {
         template_key: &str,
         region: NormRect,
         threshold: f64,
-    ) -> Result<Option<Point>, String> {
+    ) -> Result<Option<Point>, CvError> {
         self.find_element_with_optional_reference_width(
             image_path,
             template_key,
@@ -63,7 +76,7 @@ impl SidecarClient {
         region: NormRect,
         threshold: f64,
         template_reference_width: f64,
-    ) -> Result<Option<Point>, String> {
+    ) -> Result<Option<Point>, CvError> {
         self.find_element_with_optional_reference_width(
             image_path,
             template_key,
@@ -80,7 +93,7 @@ impl SidecarClient {
         region: NormRect,
         threshold: f64,
         template_reference_width: Option<f64>,
-    ) -> Result<Option<Point>, String> {
+    ) -> Result<Option<Point>, CvError> {
         let mut req = request(
             SidecarCommand::FindElement,
             serde_json::json!({
@@ -99,12 +112,12 @@ impl SidecarClient {
         }
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
-        // Sidecar surfaces hard errors (e.g. ``template not loaded: <key>``)
-        // through the ``error`` field. Treat those as Err so callers don't
+        // Sidecar surfaces hard errors through a stable errorCode with
+        // details in the ``error`` field. Treat those as Err so callers don't
         // silently degrade to "not found" — historically this masked a
         // missing-template bug for hours during the support-select work.
         if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
-            return Err(format!("find_element({template_key}): {err}"));
+            return Err(format!("find_element({template_key}): {err}").into());
         }
         if resp["found"].as_bool().unwrap_or(false) {
             let x = resp["x"].as_f64().unwrap_or(0.0);
@@ -124,7 +137,7 @@ impl SidecarClient {
         template_key: &str,
         region: NormRect,
         threshold: f64,
-    ) -> Result<Option<Point>, String> {
+    ) -> Result<Option<Point>, CvError> {
         let mut req = request(
             SidecarCommand::FindElement,
             serde_json::json!({
@@ -142,7 +155,7 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
-            return Err(format!("find_element({template_key}): {err}"));
+            return Err(format!("find_element({template_key}): {err}").into());
         }
         if resp["found"].as_bool().unwrap_or(false) {
             let x = resp["x"].as_f64().unwrap_or(0.0);
@@ -161,7 +174,7 @@ impl SidecarClient {
         template_key: &str,
         region: NormRect,
         threshold: f64,
-    ) -> Result<ElementMatch, String> {
+    ) -> Result<ElementMatch, CvError> {
         let mut req = request(
             SidecarCommand::FindElement,
             serde_json::json!({
@@ -178,7 +191,7 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
-            return Err(format!("find_element({template_key}): {err}"));
+            return Err(format!("find_element({template_key}): {err}").into());
         }
         let found = resp["found"].as_bool().unwrap_or(false);
         let score = resp["score"].as_f64().unwrap_or(0.0);
@@ -208,7 +221,7 @@ impl SidecarClient {
         image_path: Option<&Path>,
         screen: &str,
         element: &str,
-    ) -> Result<ElementMatch, String> {
+    ) -> Result<ElementMatch, CvError> {
         let mut req = request(
             SidecarCommand::FindElementByName,
             serde_json::json!({
@@ -220,7 +233,7 @@ impl SidecarClient {
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
             if !resp.get("found").and_then(|v| v.as_bool()).unwrap_or(false) {
-                return Err(err.to_string());
+                return Err(CvError::Other(err.to_string()));
             }
         }
         let found = resp["found"].as_bool().unwrap_or(false);
@@ -249,7 +262,7 @@ impl SidecarClient {
         &mut self,
         image_path: Option<&Path>,
         region: NormRect,
-    ) -> Result<f64, String> {
+    ) -> Result<f64, CvError> {
         let mut req = request(
             SidecarCommand::ReadRegionLuma,
             serde_json::json!({
@@ -264,14 +277,14 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|value| value.as_str()) {
-            return Err(err.to_string());
+            return Err(CvError::Other(err.to_string()));
         }
         if !resp["ok"].as_bool().unwrap_or(false) {
             return Err("read_region_luma failed".into());
         }
-        resp["meanLuma"]
+        Ok(resp["meanLuma"]
             .as_f64()
-            .ok_or_else(|| "read_region_luma response missing meanLuma".to_string())
+            .ok_or_else(|| "read_region_luma response missing meanLuma".to_string())?)
     }
 
     /// Check the bright selection marker above one in-battle Order Change slot.
@@ -283,7 +296,7 @@ impl SidecarClient {
         slot_x: f64,
         slot_y: f64,
         server: crate::Server,
-    ) -> Result<OrderChangeSelectionProbe, String> {
+    ) -> Result<OrderChangeSelectionProbe, CvError> {
         let mut req = request(
             SidecarCommand::ProbeOrderChangeSelection,
             serde_json::json!({
@@ -295,13 +308,13 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|value| value.as_str()) {
-            return Err(err.to_string());
+            return Err(CvError::Other(err.to_string()));
         }
         if !resp["ok"].as_bool().unwrap_or(false) {
             return Err("probe_order_change_selection failed".into());
         }
-        serde_json::from_value(resp)
-            .map_err(|err| format!("invalid order-change selection probe: {err}"))
+        Ok(serde_json::from_value(resp)
+            .map_err(|err| format!("invalid order-change selection probe: {err}"))?)
     }
 
     /// Return mean grayscale luma and HSV saturation/value for a normalized region.
@@ -310,7 +323,7 @@ impl SidecarClient {
         &mut self,
         image_path: Option<&Path>,
         region: NormRect,
-    ) -> Result<RegionColorStats, String> {
+    ) -> Result<RegionColorStats, CvError> {
         let mut req = request(
             SidecarCommand::ReadRegionLuma,
             serde_json::json!({
@@ -325,7 +338,7 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|value| value.as_str()) {
-            return Err(err.to_string());
+            return Err(CvError::Other(err.to_string()));
         }
         if !resp["ok"].as_bool().unwrap_or(false) {
             return Err("read_region_luma failed".into());
@@ -354,7 +367,7 @@ impl SidecarClient {
         dialog_region: NormRect,
         dialog_threshold: f64,
         confirm_region: NormRect,
-    ) -> Result<SkillUseDialogProbe, String> {
+    ) -> Result<SkillUseDialogProbe, CvError> {
         let mut req = request(
             SidecarCommand::ProbeSkillUseDialog,
             serde_json::json!({
@@ -406,7 +419,7 @@ impl SidecarClient {
         &mut self,
         image_path: Option<&Path>,
         region: NormRect,
-    ) -> Result<OcrRegionResult, String> {
+    ) -> Result<OcrRegionResult, CvError> {
         let mut req = request(
             SidecarCommand::OcrRegion,
             serde_json::json!({
@@ -421,10 +434,10 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv_with_timeout(&req, RECOVERABLE_OCR_COMMAND_TIMEOUT)?;
         if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
-            return Err(err.to_string());
+            return Err(CvError::Other(err.to_string()));
         }
-        serde_json::from_value::<OcrRegionResult>(resp)
-            .map_err(|e| format!("invalid ocr_region response: {e}"))
+        Ok(serde_json::from_value::<OcrRegionResult>(resp)
+            .map_err(|e| format!("invalid ocr_region response: {e}"))?)
     }
 
     /// Read the servant-enhancement level pair (``current/max``) using the
@@ -433,7 +446,7 @@ impl SidecarClient {
         &mut self,
         image_path: Option<&Path>,
         region: NormRect,
-    ) -> Result<LevelDigitsResult, String> {
+    ) -> Result<LevelDigitsResult, CvError> {
         let mut req = request(
             SidecarCommand::ReadLevelDigits,
             serde_json::json!({
@@ -448,10 +461,10 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|v| v.as_str()) {
-            return Err(err.to_string());
+            return Err(CvError::Other(err.to_string()));
         }
-        serde_json::from_value::<LevelDigitsResult>(resp)
-            .map_err(|e| format!("invalid read_level_digits response: {e}"))
+        Ok(serde_json::from_value::<LevelDigitsResult>(resp)
+            .map_err(|e| format!("invalid read_level_digits response: {e}"))?)
     }
 }
 

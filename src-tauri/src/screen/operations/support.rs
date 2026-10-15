@@ -22,7 +22,7 @@ impl SidecarClient {
         include_support_details: bool,
         support_full_list_ocr_fallback: bool,
         match_any_servant: bool,
-    ) -> Result<FindSupportsResult, String> {
+    ) -> Result<FindSupportsResult, CvError> {
         let mut req = request(
             SidecarCommand::FindSupports,
             serde_json::json!({
@@ -42,10 +42,10 @@ impl SidecarClient {
         // longer than both 15-second worker attempts plus startup/cleanup.
         let resp = self.send_recv_with_timeout(&req, RECOVERABLE_OCR_COMMAND_TIMEOUT)?;
         if let Some(err) = resp.get("error").and_then(|value| value.as_str()) {
-            return Err(err.to_string());
+            return Err(CvError::Other(err.to_string()));
         }
-        serde_json::from_value::<FindSupportsResult>(resp)
-            .map_err(|error| format!("invalid find_supports response: {error}"))
+        Ok(serde_json::from_value::<FindSupportsResult>(resp)
+            .map_err(|error| format!("invalid find_supports response: {error}"))?)
     }
 
     /// Score a support row's CE icon against the bundled template.
@@ -66,7 +66,7 @@ impl SidecarClient {
         template_path: &Path,
         threshold: f64,
         options: SupportCeVerificationOptions,
-    ) -> Result<SupportCeVerificationResult, String> {
+    ) -> Result<SupportCeVerificationResult, CvError> {
         let mut req = request(
             SidecarCommand::VerifySupportCe,
             serde_json::json!({
@@ -88,9 +88,9 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|value| value.as_str()) {
-            return Err(err.to_string());
+            return Err(CvError::Other(err.to_string()));
         }
-        serde_json::from_value::<SupportCeVerificationResult>(resp)
-            .map_err(|error| format!("invalid verify_support_ce response: {error}"))
+        Ok(serde_json::from_value::<SupportCeVerificationResult>(resp)
+            .map_err(|error| format!("invalid verify_support_ce response: {error}"))?)
     }
 }

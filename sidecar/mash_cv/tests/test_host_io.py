@@ -30,6 +30,17 @@ def test_read_image_handles_missing_empty_and_corrupt_files(tmp_path):
     assert read_image(str(path)) is None
 
 
+def test_read_image_handles_decoder_error(tmp_path, monkeypatch):
+    path = tmp_path / "broken.png"
+    path.write_bytes(b"invalid image")
+
+    def fail_decode(*_args):
+        raise cv2.error("invalid PNG header")
+
+    monkeypatch.setattr(cv2, "imdecode", fail_decode)
+    assert read_image(str(path)) is None
+
+
 def test_repl_receives_utf8_paths_with_legacy_windows_pipe_encoding(tmp_path):
     # Feed the same UTF-8 bytes Rust sends, starting Python with a GBK pipe.
     directory = tmp_path / "中文 アルトリア"

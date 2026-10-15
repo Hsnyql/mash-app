@@ -25,4 +25,7 @@ def read_image(path: str, flags: int = cv2.IMREAD_COLOR):
         return None
     if not data:
         return None
-    return cv2.imdecode(np.frombuffer(data, dtype=np.uint8), flags)
+    try:
+        return cv2.imdecode(np.frombuffer(data, dtype=np.uint8), flags)
+    except cv2.error:
+        return None

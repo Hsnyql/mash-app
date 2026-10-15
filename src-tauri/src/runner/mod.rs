@@ -1,6 +1,7 @@
 //! Battle automation engine and runtime helpers.
 //! Public runner DTOs live in submodules; this module keeps the high-level loop.
 
+use crate::automation_error::{AutomationResult, AutomationResultExt};
 mod actions;
 mod ap_recovery;
 mod attack;
@@ -291,18 +292,8 @@ impl Drop for Runner {
         // contract still lets a future backend (e.g. minitouch /
         // sendevent / native helper) release resources here.
 
-        let Some(mut sidecar) = self.sidecar.take() else {
-            return;
-        };
-        if let Err(err) = sidecar.prepare_for_cache() {
-            eprintln!("[mash-cv] prepare runner sidecar for cache failed: {err}");
-        }
-        if let Some(cache) = &self.sidecar_cache {
-            let mut guard = cache.lock().unwrap();
-            if guard.is_none() {
-                *guard = Some(sidecar);
-                return;
-            }
+        if let Some(sidecar) = self.sidecar.take() {
+            sidecar.return_to_cache(self.sidecar_cache.as_deref());
         }
     }
 }

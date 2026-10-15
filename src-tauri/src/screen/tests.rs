@@ -2,6 +2,45 @@ use super::*;
 use std::path::Path;
 
 #[test]
+fn template_initialization_requires_explicit_success_and_preserves_error_details() {
+    let context = "load_templates(/tmp/templates)";
+    for response in [
+        serde_json::json!({"ok": false, "errorCode": "template_load_failed", "error": "template load failed: battle/attack"}),
+        serde_json::json!({"ok": true, "errorCode": "template_load_failed", "error": "template load failed: battle/attack"}),
+    ] {
+        let error = SidecarClient::require_success(&response, context).unwrap_err();
+        assert!(error.contains(context));
+        assert!(error.contains("battle/attack"));
+    }
+    assert!(SidecarClient::require_success(&serde_json::json!({}), context).is_err());
+    assert!(SidecarClient::require_success(&serde_json::json!({"ok": false}), context).is_err());
+    assert!(SidecarClient::require_success(&serde_json::json!({"ok": true}), context).is_ok());
+}
+
+#[test]
+fn detection_errors_are_not_unknown_screen_observations() {
+    let response = serde_json::json!({
+        "screen": "Unknown", "score": 0.0,
+        "errorCode": "template_load_failed",
+        "error": "template load failed: screen_support_select"
+    });
+    let error = super::operations::parse_detect_response(&response).unwrap_err();
+    assert!(error.to_string().contains("screen_support_select"));
+    assert_eq!(
+        super::operations::parse_detect_response(
+            &serde_json::json!({"screen": "Unknown", "score": 0.0})
+        ),
+        Ok(("Unknown".to_string(), 0.0))
+    );
+    assert_eq!(
+        super::operations::parse_detect_response(
+            &serde_json::json!({"screen": "Battle", "score": 0.95})
+        ),
+        Ok(("Battle".to_string(), 0.95))
+    );
+}
+
+#[test]
 fn add_image_path_inserts_field_when_some() {
     let mut req = serde_json::json!({"cmd": "detect"});
     SidecarClient::add_image_path(&mut req, Some(Path::new("/tmp/x.png")));

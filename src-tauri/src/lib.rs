@@ -1,5 +1,6 @@
 mod adb;
 mod automation_coordinator;
+mod automation_error;
 mod battle_statistics;
 mod commands;
 mod craft_essence_enhancement_runner;

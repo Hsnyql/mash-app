@@ -2,6 +2,12 @@
 
 本图描述 `src-tauri/src/enhancement_runner.rs` facade 与 `src-tauri/src/enhancement_runner/` 子模块实现的强化画面及 variant 关系；Tauri lifecycle command 位于 `src-tauri/src/commands/automation/enhancement.rs`。画面路由采用 template-first 方式，使用 `src-tauri/resources/servers/<server>/cv.json` 中各 screen 的 `detect` 和 `variants` 配置。
 
+从者强化流程目前仅支持日服。国服 `cv.json` 不配置此流程专用的 `Main`、`Enhancement`、`ServantEnhancement` 和 `Ascension` 画面，避免通用画面识别探测未提供模板的规则。国服概念礼装强化使用独立的 `CraftEssenceEnhancement` 配置。
+
+实际使用的模板加载失败时，从者强化和概念礼装强化任务进入 `Error`，显示模板名或路径，停止后续识别、点击和滑动；不会把加载错误当成未匹配继续探测或使用点击坐标兜底。失败的 sidecar 不再缓存。完整的模板文件解码与配置引用检查由用户执行的“自检”完成，启动任务不额外检查所有目标。
+
+Python 在统一模板读取入口抛出 `TemplateLoadError`，请求边界返回结构化错误。Rust CV 层将其转换为 `CvError::TemplateLoad`，自动化业务层以 `AutomationError::Cv` 包装并通过 `Result` 和 `?` 逐层返回（文件读写错误则保留为 `AutomationError::Io`），最外层 `run()` 将任务设为失败并汇报。原有重试和坐标兜底仅处理普通识别错误，模板加载错误会直接退出；客户端统一负责清理和缓存健康检查。
+
 ```mermaid
 stateDiagram-v2
     state MainScreen {

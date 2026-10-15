@@ -728,6 +728,10 @@ async function invokeLegacyDevMock<T>(cmd: string, args: InvokeArgs = {}): Promi
       return {
         appVersion: "0.5.4",
         cvRuntimeVersion: "2026.05.08-runtime1",
+        templates: [
+          { server: "JP", checked: 180, errors: [] },
+          { server: "CN", checked: 150, errors: [] },
+        ],
         cvRuntimeInstalled: false,
         cvCodeVersion: "2026.05.08-code1",
         cvCodeInstalled: false,

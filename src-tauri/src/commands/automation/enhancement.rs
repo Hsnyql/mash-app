@@ -170,7 +170,7 @@ pub(crate) fn start_enhancement_automation(
         ) {
             Ok(size) => size,
             Err(err) => {
-                if let Some(user_message) = scrcpy_stream_start_user_message(&err) {
+                if let Some(user_message) = scrcpy_stream_start_user_message(&err.to_string()) {
                     fail_enhancement_start_with_debug(
                         &app,
                         &state,

@@ -16,7 +16,7 @@ impl SidecarClient {
         card_regions: Option<&[NormRect]>,
         servant_ids: &[u32],
         assets_dir: Option<&Path>,
-    ) -> Result<Vec<CommandCardMatch>, String> {
+    ) -> Result<Vec<CommandCardMatch>, CvError> {
         let mut req = request(
             SidecarCommand::FindCommandCards,
             serde_json::json!({
@@ -56,13 +56,15 @@ impl SidecarClient {
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|value| value.as_str()) {
             // Sidecar reports a missing frame / bad path here. Surface it.
-            return Err(err.to_string());
+            return Err(CvError::Other(err.to_string()));
         }
         let cards = resp
             .get("cards")
             .ok_or_else(|| "find_command_cards: response missing 'cards'".to_string())?;
-        serde_json::from_value::<Vec<CommandCardMatch>>(cards.clone())
-            .map_err(|error| format!("invalid command-card response: {error}"))
+        Ok(
+            serde_json::from_value::<Vec<CommandCardMatch>>(cards.clone())
+                .map_err(|error| format!("invalid command-card response: {error}"))?,
+        )
     }
 
     /// Report NP readiness from the bottom gauge percentages. ``np_regions``
@@ -72,7 +74,7 @@ impl SidecarClient {
         &mut self,
         image_path: Option<&Path>,
         np_regions: Option<&[NormRect]>,
-    ) -> Result<Vec<NoblePhantasmMatch>, String> {
+    ) -> Result<Vec<NoblePhantasmMatch>, CvError> {
         self.find_noble_phantasms_with_options(image_path, np_regions, false, false)
     }
 
@@ -82,7 +84,7 @@ impl SidecarClient {
         &mut self,
         image_path: Option<&Path>,
         np_regions: Option<&[NormRect]>,
-    ) -> Result<Vec<NoblePhantasmMatch>, String> {
+    ) -> Result<Vec<NoblePhantasmMatch>, CvError> {
         self.find_noble_phantasms_with_options(image_path, np_regions, false, true)
     }
 
@@ -93,7 +95,7 @@ impl SidecarClient {
         image_path: Option<&Path>,
         np_regions: Option<&[NormRect]>,
         include_digit_model_debug: bool,
-    ) -> Result<Vec<NoblePhantasmMatch>, String> {
+    ) -> Result<Vec<NoblePhantasmMatch>, CvError> {
         self.find_noble_phantasms_with_options(
             image_path,
             np_regions,
@@ -108,7 +110,7 @@ impl SidecarClient {
         np_regions: Option<&[NormRect]>,
         include_digit_model_debug: bool,
         include_sequence_recognition: bool,
-    ) -> Result<Vec<NoblePhantasmMatch>, String> {
+    ) -> Result<Vec<NoblePhantasmMatch>, CvError> {
         let mut req = request(
             SidecarCommand::FindNoblePhantasms,
             serde_json::json!({
@@ -140,13 +142,15 @@ impl SidecarClient {
 
         let resp = self.send_recv(&req)?;
         if let Some(err) = resp.get("error").and_then(|value| value.as_str()) {
-            return Err(err.to_string());
+            return Err(CvError::Other(err.to_string()));
         }
         let slots = resp
             .get("slots")
             .ok_or_else(|| "find_noble_phantasms: response missing 'slots'".to_string())?;
-        serde_json::from_value::<Vec<NoblePhantasmMatch>>(slots.clone())
-            .map_err(|error| format!("invalid noble-phantasm response: {error}"))
+        Ok(
+            serde_json::from_value::<Vec<NoblePhantasmMatch>>(slots.clone())
+                .map_err(|error| format!("invalid noble-phantasm response: {error}"))?,
+        )
     }
 
     /// Read the bond level-up result overlay and return the post-upgrade
@@ -155,7 +159,7 @@ impl SidecarClient {
         &mut self,
         image_path: Option<&Path>,
         debug: bool,
-    ) -> Result<BondLevelUpReadResult, String> {
+    ) -> Result<BondLevelUpReadResult, CvError> {
         let mut req = request(
             SidecarCommand::ReadBondLevelUp,
             serde_json::json!({
@@ -165,10 +169,10 @@ impl SidecarClient {
         Self::add_image_path(&mut req, image_path);
         let resp = self.send_recv_with_timeout(&req, Duration::from_secs(30))?;
         if let Some(err) = resp.get("error").and_then(|value| value.as_str()) {
-            return Err(err.to_string());
+            return Err(CvError::Other(err.to_string()));
         }
-        serde_json::from_value::<BondLevelUpReadResult>(resp)
-            .map_err(|error| format!("invalid read_bond_level_up response: {error}"))
+        Ok(serde_json::from_value::<BondLevelUpReadResult>(resp)
+            .map_err(|error| format!("invalid read_bond_level_up response: {error}"))?)
     }
 
     /// Send a `read_battle_scene` request to the sidecar and return the
@@ -180,7 +184,7 @@ impl SidecarClient {
         image_path: Option<&Path>,
         region: NormRect,
         debug: bool,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<serde_json::Value, CvError> {
         let mut req = request(
             SidecarCommand::ReadBattleScene,
             serde_json::json!({
@@ -207,10 +211,10 @@ impl SidecarClient {
         &mut self,
         image_path: Option<&Path>,
         region: NormRect,
-    ) -> Result<Option<(u32, u32)>, String> {
+    ) -> Result<Option<(u32, u32)>, CvError> {
         let resp = self.send_read_battle_scene(image_path, region, false)?;
         if let Some(error) = resp.get("error").and_then(|value| value.as_str()) {
-            return Err(error.to_string());
+            return Err(CvError::Other(error.to_string()));
         }
         let scene = resp["scene"].as_u64().map(|number| number as u32);
         let total = resp["total"].as_u64().map(|number| number as u32);
@@ -227,7 +231,7 @@ impl SidecarClient {
         &mut self,
         image_path: Option<&Path>,
         region: NormRect,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<serde_json::Value, CvError> {
         self.send_read_battle_scene(image_path, region, true)
     }
 }
