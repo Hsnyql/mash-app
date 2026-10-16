@@ -29,14 +29,14 @@ pub fn debug_capture(
     );
 
     let mut adb_dev = adb::Adb::new(&app, selected_adb_serial);
-    adb_dev.connect().map_err(|e| {
+    adb_dev.connect_for_server(server).map_err(|e| {
         eprintln!("[debug_capture] adb connect failed: {e}");
         e
     })?;
     let serial = adb_dev.serial().map(|s| s.to_string());
     eprintln!("[debug_capture] adb connected, serial={serial:?}");
 
-    ensure_debug_stream(&app, &debug_state, server, serial.as_deref()).map_err(|e| {
+    ensure_debug_stream(&app, &debug_state, server, &adb_dev).map_err(|e| {
         eprintln!("[debug_capture] ensure stream failed: {e}");
         e
     })?;

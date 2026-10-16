@@ -30,6 +30,7 @@ def test_scrcpy_server_command_limits_stream_to_configured_fps():
         max_size=1920,
         bit_rate=12_000_000,
         max_fps=15,
+        display_id=2,
     )
 
     command = stream._server_command()
@@ -37,6 +38,12 @@ def test_scrcpy_server_command_limits_stream_to_configured_fps():
     assert "max_size=1920" in command
     assert "video_bit_rate=12000000" in command
     assert "max_fps=15" in command
+    assert "display_id=2" in command
+
+
+def test_scrcpy_defaults_to_main_display_for_existing_callers():
+    stream = ScrcpyStream(jar_path="/tmp/scrcpy-server.jar")
+    assert "display_id=0" in stream._server_command()
 
 
 def test_get_latest_png_preserves_frame_pixels(monkeypatch):
@@ -113,8 +120,10 @@ def test_start_stream_forwards_max_fps(monkeypatch, tmp_path):
             "maxSize": 1920,
             "bitRate": 12_000_000,
             "maxFps": 15,
+            "displayId": 2,
         }
     )
 
-    assert result == {"ok": True, "width": 1920, "height": 1080}
+    assert result == {"ok": True, "width": 1920, "height": 1080, "displayId": 2}
     assert captured["max_fps"] == 15
+    assert captured["display_id"] == 2

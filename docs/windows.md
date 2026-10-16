@@ -44,6 +44,31 @@ ADB 36.0.2 的 Windows 可执行文件和两份 DLL 已包含在
 `src-tauri/resources/adb/`。`scripts/windows/prepare-windows-adb.ps1` 可以从 Google
 官方固定版本 ZIP 重建这些文件，并校验 ZIP 的 SHA-256。
 
+## MuMu 应用保活与画面采集
+
+开启应用保活后，MuMu 会为应用分配独立的 Android 显示屏；默认显示屏 0
+可能只显示模拟器桌面。Mash 从运行中的 MuMu 进程查找安装目录，通过
+MuMuManager 枚举实例，并比较所选 ADB 设备与实例的本次启动 ID；不会按端口
+推算实例编号，因此同一设备的 TCP、emulator 等连接别名也能正确匹配。
+
+匹配成功后，加载 MuMu 自带的 `external_renderer_ipc.dll`，按当前区服的
+FGO 包名调用 `nemu_get_display_id`（国服 `com.bilibili.fatego`，日服
+`com.aniplex.fategrandorder`，应用分身索引 0）。无需切到 FGO 页签，也不读取焦点屏幕。
+自动化、调试截图及原始截图导出在未启动目标游戏、SDK 查询失败或无法匹配实例时
+报告错误，不回退到桌面。设备选择列表仍允许预览未启动 FGO 的设备，此时可显示桌面。
+
+scrcpy 视频、点击、普通滑动、停留滑动和坐标映射均使用该逻辑屏幕。
+设备预览及原始截图也按目标游戏选屏，截图时再将逻辑编号映射为物理编号。
+每次开始任务或调试截图都会重新按包名查询，不缓存跨任务屏幕编号。
+任务期间保持游戏运行；若重启游戏，停止并重新开始任务。暂不支持 MuMu 应用分身。
+
+此适配需要配套更新 CV 代码；旧 CV 代码未确认非零显示屏时，Mash 会提示更新，
+避免读取桌面画面后继续向游戏发送输入。SDK 使用模拟器自带文件，无需额外安装。
+
+已在 Windows MuMu Android 15 开启保活时验证：默认流读取桌面，指定逻辑显示屏 2
+可读取游戏画面，`input -d 2` 可操作游戏。逻辑编号由当前设备动态读取，不能固定写成 2；
+它也不同于 `SurfaceFlinger --display-id` 输出的物理显示屏编号。
+
 ## 本地构建
 
 ```powershell

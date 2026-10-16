@@ -97,6 +97,7 @@ class ScrcpyStream:
         max_size: int = 0,
         bit_rate: int = 8_000_000,
         max_fps: int = 0,
+        display_id: int = 0,
     ) -> None:
         self.adb_path = adb_path
         self.jar_path = jar_path
@@ -104,6 +105,7 @@ class ScrcpyStream:
         self.max_size = max_size
         self.bit_rate = bit_rate
         self.max_fps = max_fps
+        self.display_id = display_id
 
         self.scid = random.randint(0, 0x7FFFFFFF)
         self.socket_name = f"scrcpy_{self.scid:08x}"
@@ -339,6 +341,7 @@ class ScrcpyStream:
             f"video_bit_rate={self.bit_rate}",
             f"max_size={self.max_size}",
             f"max_fps={self.max_fps}",
+            f"display_id={self.display_id}",
         ]
 
     def _connect_and_handshake_dummy(
