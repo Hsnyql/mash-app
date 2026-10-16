@@ -83,17 +83,8 @@ export function validateReports(receipt, directory) {
     }
   }
 }
-export async function downloadDigest(url, fetcher = fetch) {
-  const response = await fetcher(url, { signal: AbortSignal.timeout(300000), cache: "no-store",
-    headers: { "User-Agent": "mash-release/1.0" } });
-  if (!response.ok) throw new Error(`Download failed: ${response.status} ${url}`);
-  const hash = createHash("sha256");
-  for await (const chunk of response.body) hash.update(chunk);
-  return hash.digest("hex");
-}
-
 // Conditional writes also protect against another publisher racing our release.
-export async function publishImmutable(file, key, url, { aws, remoteDigest = downloadDigest }) {
+export async function publishImmutable(file, key, { aws }) {
   const sha256 = digest(file);
   try {
     aws(["s3api", "put-object", "--key", key, "--body", path.resolve(file), "--if-none-match", "*",
@@ -102,14 +93,13 @@ export async function publishImmutable(file, key, url, { aws, remoteDigest = dow
   } catch (error) {
     const detail = `${error.message}\n${error.stderr ?? ""}`;
     if (!/PreconditionFailed|\(412\)/.test(detail)) throw error;
-    const work = fs.mkdtempSync(path.join(os.tmpdir(), "mash-cv-existing-"));
-    try {
-      const existing = path.join(work, "object");
-      aws(["s3api", "get-object", "--key", key, existing]);
-      if (digest(existing) !== sha256) throw new Error(`Immutable object differs: ${key}`);
-    } finally { fs.rmSync(work, { recursive: true, force: true }); }
   }
-  if (await remoteDigest(url) !== sha256) throw new Error(`CDN SHA-256 mismatch: ${url}`);
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "mash-cv-verify-"));
+  try {
+    const downloaded = path.join(work, "object");
+    aws(["s3api", "get-object", "--key", key, downloaded]);
+    if (digest(downloaded) !== sha256) throw new Error(`Immutable object differs: ${key}`);
+  } finally { fs.rmSync(work, { recursive: true, force: true }); }
 }
 export async function publishRelease(receiptFile, reports, env = process.env) {
   const receipt = validateReceipt(json(receiptFile));
@@ -125,8 +115,8 @@ export async function publishRelease(receiptFile, reports, env = process.env) {
     return run("aws", [...args, "--bucket", env.R2_BUCKET, "--endpoint-url", env.R2_ENDPOINT,
       "--cli-connect-timeout", "30", "--cli-read-timeout", "300", ...tail]);
   };
-  await publishImmutable(file, receipt.objectKey, receipt.url, { aws });
-  await publishImmutable(receiptFile, `${receipt.objectKey}.release.json`, `${receipt.url}.release.json`, { aws });
+  await publishImmutable(file, receipt.objectKey, { aws });
+  await publishImmutable(receiptFile, `${receipt.objectKey}.release.json`, { aws });
 }
 export function validateApplication(receipt) {
   validateReceipt(receipt);
@@ -173,7 +163,7 @@ if (process.argv[1] && fs.realpathSync.native(fileURLToPath(import.meta.url)) ==
       const receipt = validateReceipt(json(args[0]));
       fs.writeFileSync(args[1], `Use CV code ${receipt.version} on all runtime platforms. Runtime versions and artifacts are unchanged.\n\n` +
         `Source: ${receipt.sourceSha}\n\nArtifact: ${receipt.url}\n\nSHA-256: ${receipt.sha256}\n\n` +
-        `Validation: source pytest and published-runtime compatibility checks on Windows x64 and macOS Apple Silicon; CDN download SHA-256 verified.\n`);
+        `Validation: source pytest and published-runtime compatibility checks on Windows x64 and macOS Apple Silicon; R2 S3 API download SHA-256 verified.\n`);
       break;
     }
     default: throw new Error(`Unknown command: ${command}`);

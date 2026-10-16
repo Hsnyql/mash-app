@@ -54,6 +54,8 @@ CV code 也可单独通过 [CV code release workflow](../.github/workflows/cv-co
 
 该 workflow 的 `cv-code-release` environment 需配置审批、`R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` secrets，以及 `R2_ENDPOINT` / `R2_BUCKET` variables；下载域名和对象前缀可选配置。
 
+兼容性测试和发布 job 均使用该 environment：候选测试需对象读取权限，发布还需写入权限；配置了人工审批时，候选测试也须获批。runtime 下载和上传后的 SHA-256 校验通过 R2 S3 API 完成；workflow 不验证公网 CDN 下载。runtime object key 由清单 URL 移除 `RELEASE_BASE_URL` 前缀得到，URL 必须属于该前缀；清单仍保存供应用使用的公开 URL。
+
 ## 发布顺序
 
 1. 运行检查、定稿日志，发布有变化的 CV 组件并更新 `runtime-manifest.json`。
