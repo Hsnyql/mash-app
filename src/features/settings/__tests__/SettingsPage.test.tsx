@@ -19,6 +19,10 @@ const selfCheckStatus: SelfCheckStatus = {
   appAssetsVersion: 2,
   servants: { entries: 3, hasImage: true, hasJson: true },
   ces: { entries: 5, hasImage: true, hasJson: false },
+  templates: [
+    { server: "JP", checked: 120, errors: [] },
+    { server: "CN", checked: 90, errors: ["模板缺失: button_notification"] },
+  ],
 };
 
 const importedProject: Project = {
@@ -107,7 +111,6 @@ describe("SettingsPage", () => {
           sequenceRecognitionDebugMode: "disabled",
           autoCaptureBattleBeforeAttack: false,
           autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: false,
           autoCaptureSkillUseProbe: false,
           autoCaptureUnrecognizedCriticalChance: false,
           simulateStuckAttackSelection: false,
@@ -230,18 +233,6 @@ describe("SettingsPage", () => {
           imageRecognitionDebugMode: "disabled",
           autoCaptureBattleBeforeAttack: false,
           autoCaptureBattleResultLoot: Boolean(argValue(args)),
-          autoCaptureUnknownScreenTimeout: false,
-          autoCaptureSkillUseProbe: false,
-          autoCaptureUnrecognizedCriticalChance: false,
-          simulateStuckAttackSelection: false,
-        };
-      }
-      if (cmd === "set_auto_capture_unknown_screen_timeout") {
-        return {
-          imageRecognitionDebugMode: "disabled",
-          autoCaptureBattleBeforeAttack: false,
-          autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: Boolean(argValue(args)),
           autoCaptureSkillUseProbe: false,
           autoCaptureUnrecognizedCriticalChance: false,
           simulateStuckAttackSelection: false,
@@ -252,7 +243,6 @@ describe("SettingsPage", () => {
           imageRecognitionDebugMode: "disabled",
           autoCaptureBattleBeforeAttack: false,
           autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: false,
           autoCaptureSkillUseProbe: Boolean(argValue(args)),
           autoCaptureUnrecognizedCriticalChance: false,
           simulateStuckAttackSelection: false,
@@ -263,7 +253,6 @@ describe("SettingsPage", () => {
           imageRecognitionDebugMode: "disabled",
           autoCaptureBattleBeforeAttack: false,
           autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: false,
           autoCaptureSkillUseProbe: false,
           autoCaptureUnrecognizedCriticalChance: Boolean(argValue(args)),
           simulateStuckAttackSelection: false,
@@ -274,7 +263,6 @@ describe("SettingsPage", () => {
           imageRecognitionDebugMode: "disabled",
           autoCaptureBattleBeforeAttack: false,
           autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: false,
           autoCaptureSkillUseProbe: false,
           autoCaptureUnrecognizedCriticalChance: false,
           simulateStuckAttackSelection: Boolean(argValue(args)),
@@ -285,7 +273,6 @@ describe("SettingsPage", () => {
           imageRecognitionDebugMode: "disabled",
           autoCaptureBattleBeforeAttack: Boolean(argValue(args)),
           autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: false,
           autoCaptureSkillUseProbe: false,
           autoCaptureUnrecognizedCriticalChance: false,
           simulateStuckAttackSelection: false,
@@ -297,7 +284,6 @@ describe("SettingsPage", () => {
           sequenceRecognitionDebugMode: "disabled",
           autoCaptureBattleBeforeAttack: false,
           autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: false,
           autoCaptureSkillUseProbe: false,
           autoCaptureUnrecognizedCriticalChance: false,
           simulateStuckAttackSelection: false,
@@ -309,7 +295,6 @@ describe("SettingsPage", () => {
           sequenceRecognitionDebugMode: argValue(args),
           autoCaptureBattleBeforeAttack: false,
           autoCaptureBattleResultLoot: false,
-          autoCaptureUnknownScreenTimeout: false,
           autoCaptureSkillUseProbe: false,
           autoCaptureUnrecognizedCriticalChance: false,
           simulateStuckAttackSelection: false,
@@ -346,6 +331,18 @@ describe("SettingsPage", () => {
       expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "get_self_check_status"))
         .toHaveLength(2);
     });
+  });
+
+  it("shows template health and the failing template names", async () => {
+    const user = userEvent.setup();
+    renderWithTheme(<SettingsHarness />);
+    expect(await screen.findByText("识别模板")).toBeInTheDocument();
+    expect(screen.getByText("日服 · 已检查 120 张")).toBeInTheDocument();
+    expect(screen.getByText("国服 · 已检查 90 张")).toBeInTheDocument();
+    expect(screen.getByText("正常")).toBeInTheDocument();
+    expect(screen.getByText("1 项异常")).toBeInTheDocument();
+    await user.click(screen.getByText("查看模板异常"));
+    expect(screen.getByText("模板缺失: button_notification")).toBeVisible();
   });
 
   it("switches to resource management from the left navigation", async () => {
@@ -471,7 +468,7 @@ describe("SettingsPage", () => {
     expect(screen.getByText("图像识别调试")).toBeInTheDocument();
     expect(screen.getByText("完整数字识别调试")).toBeInTheDocument();
     expect(screen.getByText("点击攻击前自动截图")).toBeInTheDocument();
-    expect(screen.getByText("无法识别画面超时时截图")).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "无法识别画面超时时截图" })).not.toBeInTheDocument();
     expect(screen.getByText("保存技能确认 probe 截图")).toBeInTheDocument();
     expect(screen.getByText("暴击率无法识别时截图")).toBeInTheDocument();
     expect(screen.getByText("测试选卡卡住恢复")).toBeInTheDocument();
@@ -507,14 +504,6 @@ describe("SettingsPage", () => {
 
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith("set_auto_capture_battle_result_loot", {
-        value: true,
-      });
-    });
-
-    await user.click(screen.getByRole("switch", { name: "无法识别画面超时时截图" }));
-
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("set_auto_capture_unknown_screen_timeout", {
         value: true,
       });
     });

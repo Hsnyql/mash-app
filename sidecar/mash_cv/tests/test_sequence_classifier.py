@@ -2,6 +2,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from mash_cv import cv as mash_cv
 from mash_cv.digit_regions import (
@@ -18,6 +19,16 @@ from mash_cv.sequence_classifier import (
 
 
 SCREENSHOTS = Path(__file__).parent / "test_data" / "screenshots"
+
+
+@pytest.fixture
+def np_templates():
+    directory = Path(__file__).resolve().parents[3] / "src-tauri/resources/servers/cn/templates"
+    mash_cv._load_templates(str(directory))
+    yield
+    mash_cv.templates.clear()
+    mash_cv.template_dirs.clear()
+
 
 
 def test_complete_np_regions_add_a_narrow_right_margin_without_moving_digit_slots():
@@ -118,7 +129,7 @@ def test_sequence_battle_scene_requires_anchor_before_using_model(monkeypatch):
     assert result == {"scene": None, "total": None}
 
 
-def test_sequence_np_shadow_stops_on_full_number_disagreement(monkeypatch):
+def test_sequence_np_shadow_stops_on_full_number_disagreement(monkeypatch, np_templates):
     image = cv2.imread(str(SCREENSHOTS / "battle_np_gauge_cn_100_100_200.png"))
     assert image is not None
     monkeypatch.setattr(mash_cv, "_sequence_recognition_mode", "shadow")
@@ -139,7 +150,7 @@ def test_sequence_np_shadow_stops_on_full_number_disagreement(monkeypatch):
     assert "宝具3=999" in result["error"]
 
 
-def test_sequence_np_enabled_does_not_accept_blank_output(monkeypatch):
+def test_sequence_np_enabled_does_not_accept_blank_output(monkeypatch, np_templates):
     image = cv2.imread(str(SCREENSHOTS / "battle_np_gauge_cn_100_100_200.png"))
     assert image is not None
     monkeypatch.setattr(mash_cv, "_sequence_recognition_mode", "enabled")
@@ -156,7 +167,7 @@ def test_sequence_np_enabled_does_not_accept_blank_output(monkeypatch):
     assert all(slot["gaugeHundredsVisible"] is None for slot in result["slots"])
 
 
-def test_sequence_np_enabled_rejects_out_of_range_value(monkeypatch):
+def test_sequence_np_enabled_rejects_out_of_range_value(monkeypatch, np_templates):
     image = cv2.imread(str(SCREENSHOTS / "battle_np_gauge_cn_100_100_200.png"))
     assert image is not None
     monkeypatch.setattr(mash_cv, "_sequence_recognition_mode", "enabled")
@@ -174,7 +185,7 @@ def test_sequence_np_enabled_rejects_out_of_range_value(monkeypatch):
     assert all(slot["gaugeSequenceAccepted"] is False for slot in result["slots"])
 
 
-def test_sequence_np_enabled_uses_complete_model_number(monkeypatch):
+def test_sequence_np_enabled_uses_complete_model_number(monkeypatch, np_templates):
     image = cv2.imread(str(SCREENSHOTS / "battle_np_gauge_cn_100_100_200.png"))
     assert image is not None
     monkeypatch.setattr(mash_cv, "_sequence_recognition_mode", "enabled")
@@ -190,7 +201,7 @@ def test_sequence_np_enabled_uses_complete_model_number(monkeypatch):
     assert all(slot["gaugeDigitCount"] == 3 for slot in result["slots"])
 
 
-def test_sequence_np_does_not_run_on_attack_card_read(monkeypatch):
+def test_sequence_np_does_not_run_on_attack_card_read(monkeypatch, np_templates):
     image = cv2.imread(str(SCREENSHOTS / "battle_np_gauge_cn_100_100_200.png"))
     assert image is not None
     monkeypatch.setattr(mash_cv, "_sequence_recognition_mode", "shadow")

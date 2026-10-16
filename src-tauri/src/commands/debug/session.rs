@@ -82,6 +82,9 @@ pub(crate) fn ensure_debug_sidecar(
     server: Server,
 ) -> Result<(), String> {
     let mut guard = debug_state.0.lock().unwrap();
+    if guard.as_ref().is_some_and(|client| !client.is_healthy()) {
+        *guard = None;
+    }
     if guard.is_none() {
         let tdirs = resolve_template_dirs(app, server);
         let cfgs = resolve_cv_config_paths(app, server);
@@ -120,7 +123,7 @@ pub(super) fn ensure_debug_stream(
     app: &tauri::AppHandle,
     debug_state: &DebugSidecar,
     server: Server,
-    serial: Option<&str>,
+    adb_dev: &adb::Adb,
 ) -> Result<(), String> {
     ensure_debug_sidecar(app, debug_state, server)?;
 
@@ -135,7 +138,10 @@ pub(super) fn ensure_debug_stream(
     // sidecar agrees (catches the case where the decoder thread died after
     // a successful ``start_stream`` returned).
     if let Some((w, h)) = client.stream_size() {
-        if crate::stream_meets_minimum_resolution(w, h) && client.get_frame_jpeg(0.0).is_ok() {
+        if client.stream_matches_device(adb_dev.serial(), adb_dev.display_id())
+            && crate::stream_meets_minimum_resolution(w, h)
+            && client.get_frame_jpeg(0.0).is_ok()
+        {
             return Ok(());
         }
         if let Err(e) = client.stop_stream() {
@@ -150,14 +156,12 @@ pub(super) fn ensure_debug_stream(
 
     eprintln!(
         "[debug] starting scrcpy stream (serial={}, jar={})",
-        serial.unwrap_or("<auto>"),
+        adb_dev.serial().unwrap_or("<auto>"),
         jar.display()
     );
-    let adb_path = adb::resolve_adb_path(app);
     let (w, h) = client.start_stream(
-        &adb_path,
+        adb_dev,
         &jar,
-        serial,
         STREAM_MAX_SIZE,
         STREAM_BIT_RATE,
         STREAM_MAX_FPS,
@@ -185,9 +189,8 @@ pub(super) fn ensure_debug_stream_for_current_device(
         .clone();
     let server = current_server(server_state);
     let mut adb_dev = adb::Adb::new(app, selected_adb_serial);
-    adb_dev.connect()?;
-    let serial = adb_dev.serial().map(|s| s.to_string());
-    ensure_debug_stream(app, debug_state, server, serial.as_deref())
+    adb_dev.connect_for_server(server)?;
+    ensure_debug_stream(app, debug_state, server, &adb_dev)
 }
 
 pub(super) fn debug_stream_status(debug_state: &DebugSidecar) -> DebugStreamStatus {

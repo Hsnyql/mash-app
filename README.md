@@ -1,186 +1,55 @@
-# mash
+# Mash
 
-An automation tool for FGO (Fate/Grand Order). Connects to an Android device or emulator via ADB and automates party setup, support selection, and more.
+基于 Tauri、Rust 和 React 的《Fate/Grand Order》自动化工具，通过 ADB 连接 Android 设备或模拟器，使用图像识别执行操作。
 
-## Tech Stack
+[下载安装](https://docs.mash.xiaotongx.com/start/install/) · [使用文档](https://docs.mash.xiaotongx.com/) · [开发文档](docs/README.md) · [参与贡献](CONTRIBUTING.md)
 
-| Layer            | Technology                                 |
-| ---------------- | ------------------------------------------ |
-| Desktop runtime  | Tauri 2 (Rust)                             |
-| Frontend         | React 18 + TypeScript + Vite 6             |
-| UI components    | Radix UI Themes                            |
-| Image recognition| Python sidecar (OpenCV template matching)  |
-| Device control   | ADB (Android Debug Bridge)                 |
-| Package manager  | pnpm                                       |
+## 功能
 
-## Project Structure
+- 自动战斗：按回合、战斗阶段和自定义条件释放技能、使用宝具、选择指令卡。
+- 队伍与助战：管理从者和礼装配置，按条件筛选助战。
+- 自动强化：从者强化、概念礼装强化与搓丸子。
+- 友情点召唤：自动执行友情点抽取。
 
-```
-src/                         # React frontend
-  App.tsx                    # Top-level routing and cross-feature orchestration
-  components/common/        # Shared UI primitives used by multiple features
-  features/                  # Feature-owned pages, components, helpers, and tests
-  styles/                    # Global and feature-oriented CSS
-  test/                      # Shared Vitest/RTL setup and render helpers
-  types/                     # Shared TypeScript interfaces for backend DTOs
-src-tauri/                   # Tauri / Rust backend
-  src/
-    main.rs                  # Thin entry, calls mash_lib::run()
-    lib.rs                   # Tauri command registration & plugin wiring
-    commands/                # Tauri commands grouped by domain
-      automation/            # Battle, enhancement, CE, and friend-point lifecycle commands
-      catalog/               # Servant/CE catalogs, portraits, mystic codes, and skill helpers
-      debug/                 # Capture/session and battle, NP, support, enhancement diagnostics
-      assets/                # Managed asset download/install helpers
-      projects/              # Project persistence and configuration transfer
-      runtime/               # External mash-cv archive and resource helpers
-    adb.rs                   # ADB device connection, tap, swipe
-    screen.rs, screen/       # Sidecar client, protocol, DTOs, and operation groups
-      operations/            # Battle, support, enhancement, and template-matching IPC
-    runner/                  # Battle state machine and domain handlers
-      actions/               # Skill execution helpers
-      attack/                # Card selection, NP recognition, conditions, and runtime flows
-      grand/                 # Grand-class strategy implementations and shared rules
-      party/                 # Lineup mutation, action resolution, replay, and runtime identity
-      support/               # Support selection policy and runtime flow
-    enhancement_runner/      # Servant-enhancement runtime helpers
-    craft_essence_enhancement_runner/ # CE enhancement policy/material/runtime helpers
-    touch/                   # Low-level, jittered device input abstraction
-    resources/               # Embedded catalog JSON consumed with include_str!
-  resources/
-    runtime-manifest.json    # Required mash-cv base/code versions + artifact metadata
-    servers/                 # JP/CN/shared CV configs and PNG templates
-    scrcpy/scrcpy-server.jar # Pushed to device for realtime H.264 streaming
-sidecar/                     # Python image recognition process (Poetry-managed)
-  mash_cv/
-    mash_cv/                 # Package source
-      cv.py                  # JSON-line REPL, template matching, turn-number OCR
-      stream.py              # scrcpy client (PyAV H.264 decoder)
-      region_tool.py         # CLI helper for extracting template regions
-    tests/                   # pytest suite (+ sample screenshots & templates)
-    build_sidecar.py         # Shared native PyInstaller builder
-    pyproject.toml           # Poetry dependencies
-```
+## 安装与使用
 
-See [docs/module-structure.md](docs/module-structure.md) for module ownership and placement rules.
+支持 Windows x64 和 macOS Apple Silicon。前往[安装指南](https://docs.mash.xiaotongx.com/start/install/)下载对应版本。
 
-## Prerequisites
+1. 启动 Android 设备或模拟器，开启 ADB 连接并运行 FGO。
+2. 在 Mash 中连接设备，按提示安装 CV 运行时和资源。
+3. 配置队伍与自动化任务，开始运行。
 
-- [Node.js](https://nodejs.org/) (LTS)
-- [Rust](https://www.rust-lang.org/tools/install) (stable)
-- [pnpm](https://pnpm.io/)
-- [ADB](https://developer.android.com/tools/adb) (must be on PATH)
-- Python 3 + [Poetry](https://python-poetry.org/) (only needed to build the sidecar)
+## 本地开发
 
-## Development
+需要 Node.js 22、Rust stable、`package.json` 指定的 pnpm，以及当前平台的 Tauri 构建依赖。环境配置与测试方式见[贡献指南](CONTRIBUTING.md)。
 
 ```bash
-# Install frontend dependencies
-pnpm install
-
-# Start dev mode (Vite + Rust hot reload)
+git clone https://github.com/ZaiZheTingDun/mash-app.git
+cd mash-app
+pnpm install --frozen-lockfile
 pnpm tauri dev
-
-# Frontend-only dev server (no Tauri shell)
-pnpm dev
-
-# Lint
-pnpm lint
 ```
 
-### CV Runtime
+仅预览前端可运行 `pnpm dev`；设备连接和自动化需要 Tauri 后端及已安装的 CV 运行时。
 
-The automation runtime depends on the `mash-cv` sidecar for screen recognition and the scrcpy H.264 stream. `mash-cv` is **not** bundled into the Tauri app. The main app ships only the UI/Rust/resources bundle and reads `src-tauri/resources/runtime-manifest.json` to decide which external CV packages are required.
+## 项目结构
 
 ```text
-app_data_dir()/runtime/mash-cv/runtime/<runtimeVersion>/mash-cv-runtime/
-app_data_dir()/runtime/mash-cv/code/<codeVersion>/mash-cv-code/
+src/                  React 界面
+src-tauri/            Rust 后端、自动化引擎与应用资源
+sidecar/mash_cv/      Python 图像识别与视频流处理
+scripts/              构建与发布脚本
+docs/                 开发与设计文档
 ```
 
-The runtime base contains the heavy PyInstaller/native dependency tree and OCR models. The code package contains the lightweight `mash_cv/*.py` source. If either artifact is missing or stale, the app shows a CV package install button near the automation entry points.
+Rust 管理应用状态与自动化决策，React 负责展示和交互；Python 子进程通过 scrcpy / PyAV 获取画面，使用 OpenCV 和 OCR 完成识别。详见[模块结构](docs/module-structure.md)。
 
-Version numbers are managed in `versions.toml` and use `x.x.x` format. Distribution details, R2 object layout, tag conventions, and release troubleshooting are documented in [docs/distribution.md](docs/distribution.md).
+## 贡献与反馈
 
-Build local sidecar artifacts for testing:
+欢迎提交 [Issue](https://github.com/ZaiZheTingDun/mash-app/issues) 和 Pull Request。提交问题时请附上 Mash 版本、操作系统、区服和复现步骤；较大的改动请先开 Issue 讨论。开发流程见[贡献指南](CONTRIBUTING.md)，安全漏洞请按[安全政策](SECURITY.md)私下报告。
 
-```bash
-bash scripts/macos/build-cv.sh
-```
+## 许可证
 
-Release entry points:
+原创源代码及文档采用 [MIT License](LICENSE)。第三方软件、模型和游戏资源的授权见 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES)。
 
-```bash
-# Full release orchestration (read-only plan by default)
-mise exec -- scripts/macos/release.sh 0.2.2
-
-# Execute the planned release; add --dmg and --push when wanted
-mise exec -- scripts/macos/release.sh 0.2.2 --publish
-
-# App updater release: bump versions, commit, and tag vX.Y.Z
-scripts/macos/bump-app-version.sh 0.2.2
-
-# CV code release: bump and create the tag
-scripts/macos/bump-cv-code-version.sh 0.2.2
-git push origin cv-code/0.2.2
-
-# CV code release from the local machine
-R2_ENDPOINT=... R2_BUCKET=... RELEASE_BASE_URL=... scripts/macos/release-cv-code.sh 0.2.2
-
-# CV runtime release: build, upload to R2, update manifest, commit, and tag
-R2_ENDPOINT=... R2_BUCKET=... RELEASE_BASE_URL=... scripts/macos/release-cv-runtime.sh 0.2.2
-```
-
-Scripts are grouped under `scripts/macos/` (Bash), `scripts/windows/`
-(PowerShell), and `scripts/shared/` (portable Node helpers). Run platform entry
-points resolve the repository root themselves; macOS icon generation accepts an
-explicit project root and source image.
-
-Windows equivalents run natively without Git Bash or WSL:
-
-```powershell
-./scripts/windows/build-cv.ps1
-pnpm build:windows -Unsigned
-# Read-only plan; add -Publish to execute, -Installer for direct downloads,
-# and -Push to push release commits and tags.
-pnpm release:windows 0.16.0 -CvCode 0.4.27 -CvRuntime 0.3.0 -Installer
-```
-
-See [Windows release instructions](docs/windows.md) for each individual entry
-point and [distribution details](docs/distribution.md) for R2 paths and signing.
-
-Running the sidecar as PyInstaller `--onedir` avoids re-extracting dylibs on every launch, cutting warm-start time to well under a second after the runtime is installed.
-
-Run the sidecar tests (no Rust/Node required):
-
-```bash
-cd sidecar/mash_cv
-poetry install
-poetry run pytest
-```
-
-## Production Build
-
-Windows x64 prerequisites, native CV builds, NSIS installers, and updater
-publishing are documented in [docs/windows.md](docs/windows.md).
-
-```bash
-pnpm tauri build
-```
-
-The Tauri bundle intentionally excludes `mash-cv`; app updates remain small. Bump the shared `mashCvCodeVersion` for Python-only sidecar changes. Each platform has an independent `runtimeVersion`; bump only the affected platform when OCR models, PyInstaller dependencies, native dependencies, or the runtime launcher/archive layout changes. See [docs/distribution.md](docs/distribution.md) for the release flow.
-
-## How It Works
-
-1. Connects to an Android device or BlueStacks emulator via ADB
-2. The `mash-cv` sidecar pushes `scrcpy-server.jar` to the device and opens a realtime H.264 stream, decoding frames with PyAV
-3. The Rust runner drives a state machine that asks the sidecar to identify the current screen (team confirm, support select, battle, …) and find UI elements via config-driven OpenCV template matching
-4. Support selection OCR uses servant metadata localized for the active server. For CN, `name_cn_server` in `servants.json` is preferred over `name_cn` when present, so renamed in-game servant/NP text is matched first.
-5. During battle, the sidecar also OCRs the turn number (anchor-bounded digit template matching) so the runner can schedule skills turn-by-turn
-6. Based on the detected screen, the runner issues tap/swipe commands over ADB
-7. The frontend displays real-time automation status and allows stopping at any time
-
-## License
-
-Mash's original source code and documentation are licensed under the [MIT License](LICENSE).
-Bundled third-party software, OCR models, dependencies, and game-derived assets remain subject
-to their own terms. See [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) for details.
+Mash 是非官方项目，与 FGO 的开发商、发行商及相关权利方无关联。使用前请了解游戏服务条款及自动化带来的账号风险。

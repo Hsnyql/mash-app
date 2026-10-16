@@ -6,16 +6,16 @@
 use super::*;
 
 impl Runner {
-    pub(crate) fn handle_support_select(&mut self) {
+    pub(crate) fn handle_support_select(&mut self) -> AutomationResult<()> {
         // No servant pinned → preserve the legacy top-row pick unless a CE
         // is configured, in which case the CE alone identifies the row.
         let Some(servant_id) = self.config.support_servant_id else {
             if self.support_ce_filter_enabled() {
-                self.handle_support_ce_only_select();
+                self.handle_support_ce_only_select()?;
             } else {
-                self.legacy_pick_first_support();
+                self.legacy_pick_first_support()?;
             }
-            return;
+            return Ok(());
         };
 
         // Lazy-load (name, np_names, class_name) once per run. The shared
@@ -35,7 +35,7 @@ impl Runner {
                         "加载助战元数据",
                         format!("servant {servant_id}: {e}"),
                     );
-                    return;
+                    return Ok(());
                 }
             }
         }
@@ -58,24 +58,24 @@ impl Runner {
                         &format!("切换职阶筛选 -> {}", meta.class_name),
                     );
                     if !self.tap_at("SupportSelect", tab) {
-                        return;
+                        return Ok(());
                     }
                     self.support_class_tab_done = true;
                     thread::sleep(SUPPORT_CLASS_TAB_SETTLE);
-                    return;
+                    return Ok(());
                 }
                 Some(SupportClassFilterAction::CnExtra(extra)) => {
                     self.emit(
                         "SupportSelect",
                         &format!("设置 EXTRA 具体职阶筛选 -> {}", extra.label),
                     );
-                    if !self.configure_cn_extra_class_filter(extra) {
-                        return;
+                    if !self.configure_cn_extra_class_filter(extra)? {
+                        return Ok(());
                     }
                     self.support_extra_class_filter_configured = true;
                     self.support_class_tab_done = true;
                     thread::sleep(SUPPORT_EXTRA_FILTER_RESULT_SETTLE);
-                    return;
+                    return Ok(());
                 }
                 None => {
                     // Unknown class → mark done so we don't loop, and let
@@ -94,22 +94,26 @@ impl Runner {
         let include_support_details =
             support_level_filtering_enabled(self.server) && self.has_support_level_requirements();
         let support_full_list_ocr_fallback = self.config.support_full_list_ocr_fallback;
-        let result = match self.sidecar().find_supports(
-            None,
-            &meta.name,
-            &meta.names,
-            &meta.excluded_names,
-            &meta.np_names,
-            meta.require_np_match,
-            include_support_details,
-            support_full_list_ocr_fallback,
-            false,
-        ) {
+        let result = match self
+            .sidecar()
+            .find_supports(
+                None,
+                &meta.name,
+                &meta.names,
+                &meta.excluded_names,
+                &meta.np_names,
+                meta.require_np_match,
+                include_support_details,
+                support_full_list_ocr_fallback,
+                false,
+            )
+            .recoverable()?
+        {
             Ok(r) => r,
             Err(e) => {
-                self.release_support_ocr();
-                self.fail_action("SupportSelect", "OCR 助战识别", e);
-                return;
+                self.release_support_ocr()?;
+                self.fail_action("SupportSelect", "OCR 助战识别", e.to_string());
+                return Ok(());
             }
         };
 
@@ -128,7 +132,7 @@ impl Runner {
         let mut skill_wait_diagnostic: Option<String> = None;
         let mut chosen_index: Option<usize> = None;
         for (index, row) in result.supports.iter().enumerate() {
-            if let Some(mismatch) = self.support_row_ce_mismatch(row) {
+            if let Some(mismatch) = self.support_row_ce_mismatch(row)? {
                 if !ce_filter_reasons.contains(&mismatch.reason) {
                     ce_filter_reasons.push(mismatch.reason);
                 }
@@ -182,14 +186,14 @@ impl Runner {
         let chosen = chosen_index.and_then(|index| result.supports.get(index));
 
         if let Some(row) = chosen {
-            self.release_support_ocr();
+            self.release_support_ocr()?;
             self.emit("SupportSelect", &support_found_summary(&meta.name, row));
             self.emit_debug(
                 "SupportSelect",
                 &support_found_debug_detail(&meta.name, row),
             );
             if !self.tap_at("SupportSelect", support_row_tap_point(row)) {
-                return;
+                return Ok(());
             }
             self.support_selected = true;
             self.support_scroll_count = 0;
@@ -199,7 +203,7 @@ impl Runner {
             self.support_class_tab_done = false;
             self.support_level_progress = SupportLevelPanelProgress::default();
             thread::sleep(ACTION_DELAY);
-            return;
+            return Ok(());
         }
 
         // OCR found rows but the pinned CE didn't match any of them —
@@ -240,10 +244,10 @@ impl Runner {
                 ),
             );
             if !self.tap_at("SupportSelect", SUPPORT_SKILL_PANEL_TOGGLE_BUTTON) {
-                return;
+                return Ok(());
             }
             thread::sleep(SUPPORT_SKILL_PANEL_TOGGLE_SETTLE);
-            return;
+            return Ok(());
         }
         if !level_filter_reasons.is_empty() {
             self.emit(
@@ -266,71 +270,73 @@ impl Runner {
             && self.update_support_grand_section_exhausted(
                 result.diagnostics.is_grand_section_visible,
             );
-        if !grand_section_exhausted && !self.support_scroll_bar_at_end() {
-            // Surface the Grand-section signal in the normal log, so the
-            // operator can see whether this scroll continues a Grand scan
-            // or a normal support-list scan.
-            let grand_visible_in_grand_mode = self.config.support_grand_mode
-                && result.diagnostics.is_grand_section_visible == Some(true);
-            self.emit(
-                "SupportSelect",
-                &support_not_found_scroll_message(
-                    &meta.name,
-                    grand_visible_in_grand_mode,
-                    self.support_scroll_count + 1,
-                ),
-            );
-            if !self.scroll_support_list(&result.diagnostics.confirm_button_anchors) {
-                return;
-            }
-            self.support_scroll_count += 1;
-            self.support_level_progress = SupportLevelPanelProgress::default();
-            thread::sleep(SUPPORT_SCROLL_SETTLE);
-        } else if self.support_refresh_count < SUPPORT_MAX_REFRESHES {
-            let reason = if grand_section_exhausted {
-                "冠位助战已扫完"
+        Ok(
+            if !grand_section_exhausted && !self.support_scroll_bar_at_end()? {
+                // Surface the Grand-section signal in the normal log, so the
+                // operator can see whether this scroll continues a Grand scan
+                // or a normal support-list scan.
+                let grand_visible_in_grand_mode = self.config.support_grand_mode
+                    && result.diagnostics.is_grand_section_visible == Some(true);
+                self.emit(
+                    "SupportSelect",
+                    &support_not_found_scroll_message(
+                        &meta.name,
+                        grand_visible_in_grand_mode,
+                        self.support_scroll_count + 1,
+                    ),
+                );
+                if !self.scroll_support_list(&result.diagnostics.confirm_button_anchors) {
+                    return Ok(());
+                }
+                self.support_scroll_count += 1;
+                self.support_level_progress = SupportLevelPanelProgress::default();
+                thread::sleep(SUPPORT_SCROLL_SETTLE);
+            } else if self.support_refresh_count < SUPPORT_MAX_REFRESHES {
+                let reason = if grand_section_exhausted {
+                    "冠位助战已扫完"
+                } else {
+                    "已到底部"
+                };
+                self.emit(
+                    "SupportSelect",
+                    &format!(
+                        "{reason}，刷新助战列表 ({}/{})",
+                        self.support_refresh_count + 1,
+                        SUPPORT_MAX_REFRESHES,
+                    ),
+                );
+                if !self.wait_for_support_refresh_available()? {
+                    return Ok(());
+                }
+                if !self.tap_at("SupportSelect", SUPPORT_REFRESH_BUTTON) {
+                    return Ok(());
+                }
+                self.support_scroll_count = 0;
+                self.support_refresh_count += 1;
+                self.support_grand_section_seen = false;
+                self.support_grand_section_misses = 0;
+                self.support_level_progress = SupportLevelPanelProgress::default();
+                // Refresh occasionally snaps the class filter back to "all";
+                // re-tap the class tab on the next poll to be safe.
+                self.support_class_tab_done = false;
+                if !self.confirm_support_refresh_dialog_if_needed()? {
+                    return Ok(());
+                }
             } else {
-                "已到底部"
-            };
-            self.emit(
-                "SupportSelect",
-                &format!(
-                    "{reason}，刷新助战列表 ({}/{})",
-                    self.support_refresh_count + 1,
-                    SUPPORT_MAX_REFRESHES,
-                ),
-            );
-            if !self.wait_for_support_refresh_available() {
-                return;
-            }
-            if !self.tap_at("SupportSelect", SUPPORT_REFRESH_BUTTON) {
-                return;
-            }
-            self.support_scroll_count = 0;
-            self.support_refresh_count += 1;
-            self.support_grand_section_seen = false;
-            self.support_grand_section_misses = 0;
-            self.support_level_progress = SupportLevelPanelProgress::default();
-            // Refresh occasionally snaps the class filter back to "all";
-            // re-tap the class tab on the next poll to be safe.
-            self.support_class_tab_done = false;
-            if !self.confirm_support_refresh_dialog_if_needed() {
-                return;
-            }
-        } else {
-            self.release_support_ocr();
-            self.fail_action(
-                "SupportSelect",
-                "查找助战",
-                format!("刷新 {} 次仍未找到 {}", SUPPORT_MAX_REFRESHES, meta.name),
-            );
-        }
+                self.release_support_ocr()?;
+                self.fail_action(
+                    "SupportSelect",
+                    "查找助战",
+                    format!("刷新 {} 次仍未找到 {}", SUPPORT_MAX_REFRESHES, meta.name),
+                );
+            },
+        )
     }
 
     /// Select a support by its equipped Craft Essence when no servant is
     /// pinned. The sidecar returns the visible row anchors without applying
     /// name matching, then the ordinary/grand CE verifier chooses a row.
-    pub(crate) fn handle_support_ce_only_select(&mut self) {
+    pub(crate) fn handle_support_ce_only_select(&mut self) -> AutomationResult<()> {
         let missing_template = if self.config.support_grand_mode {
             let expected = (0..3).find(|&index| {
                 !grand_support_ce_ids(&self.config, index).is_empty()
@@ -346,33 +352,37 @@ impl Runner {
         };
         if let Some(reason) = missing_template {
             self.fail_action("SupportSelect", "按礼装查找助战", reason);
-            return;
+            return Ok(());
         }
 
         let support_full_list_ocr_fallback = self.config.support_full_list_ocr_fallback;
-        let result = match self.sidecar().find_supports(
-            None,
-            "",
-            &[],
-            &[],
-            &[],
-            false,
-            false,
-            support_full_list_ocr_fallback,
-            true,
-        ) {
+        let result = match self
+            .sidecar()
+            .find_supports(
+                None,
+                "",
+                &[],
+                &[],
+                &[],
+                false,
+                false,
+                support_full_list_ocr_fallback,
+                true,
+            )
+            .recoverable()?
+        {
             Ok(result) => result,
             Err(error) => {
-                self.release_support_ocr();
-                self.fail_action("SupportSelect", "OCR 助战识别", error);
-                return;
+                self.release_support_ocr()?;
+                self.fail_action("SupportSelect", "OCR 助战识别", error.to_string());
+                return Ok(());
             }
         };
 
         let mut mismatch_reasons = Vec::new();
         let mut mismatch_debug_summaries = Vec::new();
         for (index, row) in result.supports.iter().enumerate() {
-            if let Some(mismatch) = self.support_row_ce_mismatch(row) {
+            if let Some(mismatch) = self.support_row_ce_mismatch(row)? {
                 if !mismatch_reasons.contains(&mismatch.reason) {
                     mismatch_reasons.push(mismatch.reason);
                 }
@@ -384,7 +394,7 @@ impl Runner {
                 continue;
             }
 
-            self.release_support_ocr();
+            self.release_support_ocr()?;
             let label = if row.name_text.is_empty() {
                 format!("第 {} 行", index + 1)
             } else {
@@ -409,7 +419,7 @@ impl Runner {
             );
             self.emit_debug("SupportSelect", &format!("礼装匹配助战 {label}"));
             if !self.tap_at("SupportSelect", support_row_tap_point(row)) {
-                return;
+                return Ok(());
             }
             self.support_selected = true;
             self.support_scroll_count = 0;
@@ -417,7 +427,7 @@ impl Runner {
             self.support_grand_section_seen = false;
             self.support_grand_section_misses = 0;
             thread::sleep(ACTION_DELAY);
-            return;
+            return Ok(());
         }
 
         if !mismatch_reasons.is_empty() {
@@ -437,60 +447,64 @@ impl Runner {
             && self.update_support_grand_section_exhausted(
                 result.diagnostics.is_grand_section_visible,
             );
-        if !grand_section_exhausted && !self.support_scroll_bar_at_end() {
-            self.emit(
-                "SupportSelect",
-                &format!(
-                    "当前助战列表没有匹配礼装，继续滚动… ({})",
-                    self.support_scroll_count + 1
-                ),
-            );
-            if !self.scroll_support_list(&result.diagnostics.confirm_button_anchors) {
-                return;
-            }
-            self.support_scroll_count += 1;
-            thread::sleep(SUPPORT_SCROLL_SETTLE);
-        } else if self.support_refresh_count < SUPPORT_MAX_REFRESHES {
-            let reason = if grand_section_exhausted {
-                "冠位助战已扫完"
+        Ok(
+            if !grand_section_exhausted && !self.support_scroll_bar_at_end()? {
+                self.emit(
+                    "SupportSelect",
+                    &format!(
+                        "当前助战列表没有匹配礼装，继续滚动… ({})",
+                        self.support_scroll_count + 1
+                    ),
+                );
+                if !self.scroll_support_list(&result.diagnostics.confirm_button_anchors) {
+                    return Ok(());
+                }
+                self.support_scroll_count += 1;
+                thread::sleep(SUPPORT_SCROLL_SETTLE);
+            } else if self.support_refresh_count < SUPPORT_MAX_REFRESHES {
+                let reason = if grand_section_exhausted {
+                    "冠位助战已扫完"
+                } else {
+                    "已到底部"
+                };
+                self.emit(
+                    "SupportSelect",
+                    &format!(
+                        "{reason}，刷新助战列表 ({}/{})",
+                        self.support_refresh_count + 1,
+                        SUPPORT_MAX_REFRESHES
+                    ),
+                );
+                if !self.wait_for_support_refresh_available()? {
+                    return Ok(());
+                }
+                if !self.tap_at("SupportSelect", SUPPORT_REFRESH_BUTTON) {
+                    return Ok(());
+                }
+                self.support_scroll_count = 0;
+                self.support_refresh_count += 1;
+                self.support_grand_section_seen = false;
+                self.support_grand_section_misses = 0;
+                if !self.confirm_support_refresh_dialog_if_needed()? {
+                    return Ok(());
+                }
             } else {
-                "已到底部"
-            };
-            self.emit(
-                "SupportSelect",
-                &format!(
-                    "{reason}，刷新助战列表 ({}/{})",
-                    self.support_refresh_count + 1,
-                    SUPPORT_MAX_REFRESHES
-                ),
-            );
-            if !self.wait_for_support_refresh_available() {
-                return;
-            }
-            if !self.tap_at("SupportSelect", SUPPORT_REFRESH_BUTTON) {
-                return;
-            }
-            self.support_scroll_count = 0;
-            self.support_refresh_count += 1;
-            self.support_grand_section_seen = false;
-            self.support_grand_section_misses = 0;
-            if !self.confirm_support_refresh_dialog_if_needed() {
-                return;
-            }
-        } else {
-            self.release_support_ocr();
-            self.fail_action(
-                "SupportSelect",
-                "查找助战",
-                format!("刷新 {} 次仍未找到匹配礼装的助战", SUPPORT_MAX_REFRESHES),
-            );
-        }
+                self.release_support_ocr()?;
+                self.fail_action(
+                    "SupportSelect",
+                    "查找助战",
+                    format!("刷新 {} 次仍未找到匹配礼装的助战", SUPPORT_MAX_REFRESHES),
+                );
+            },
+        )
     }
 
-    pub(crate) fn release_support_ocr(&mut self) {
-        if let Err(error) = self.sidecar().release_ocr() {
-            eprintln!("[mash-cv] release support-search OCR worker failed: {error}");
-        }
+    pub(crate) fn release_support_ocr(&mut self) -> AutomationResult<()> {
+        Ok(
+            if let Err(error) = self.sidecar().release_ocr().recoverable()? {
+                eprintln!("[mash-cv] release support-search OCR worker failed: {error}");
+            },
+        )
     }
 
     pub(crate) fn has_support_level_requirements(&self) -> bool {

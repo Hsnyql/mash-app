@@ -31,6 +31,7 @@ import type {
   BattleRunStatus,
 } from "../../types/battleRunStatus";
 import { BattleRunStatusPanel } from "./BattleRunStatusPanel";
+import { RecognitionDiagnosticActions } from "./RecognitionDiagnosticActions";
 import { SupportAuthorDialog } from "./SupportAuthorDialog";
 
 type LogLevel = "info" | "warn" | "debug" | "localDebug";
@@ -1024,6 +1025,7 @@ export function StatusBar({
           <Flex align="center" justify="between" className="operation-log-header">
             <Text size="1" weight="bold">操作日志</Text>
             <Flex align="center" gap="2">
+              <RecognitionDiagnosticActions />
               <label className="operation-log-debug-toggle">
                 <Checkbox
                   size="1"

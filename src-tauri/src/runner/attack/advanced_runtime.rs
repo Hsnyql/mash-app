@@ -9,7 +9,7 @@ impl Runner {
         nps: Vec<NoblePhantasmMatch>,
         party_ids: [Option<u32>; 3],
         party_supports: [bool; 3],
-    ) {
+    ) -> AutomationResult<()> {
         let grand_servants = self.grand_servant_runtime_configs();
         let Some(scene) = self
             .advanced_scenes
@@ -40,12 +40,12 @@ impl Runner {
                     self.config.grand_class,
                     self.config.prefer_higher_critical_chance,
                 );
-                self.tap_picks("Attack", &picks, &cards, &party_ids);
-                return;
+                self.tap_picks("Attack", &picks, &cards, &party_ids)?;
+                return Ok(());
             }
             self.emit("Attack", "无高级指令配置，按默认顺序补位");
-            self.pick_and_tap_attack_cards(&cards, &nps, &party_ids, &party_supports, None);
-            return;
+            self.pick_and_tap_attack_cards(&cards, &nps, &party_ids, &party_supports, None)?;
+            return Ok(());
         };
 
         if scene.rules.is_empty() || uses_advanced_strategy_flow(&scene) {
@@ -83,9 +83,9 @@ impl Runner {
             let (cards, nps, party_ids, party_supports) = if current_party_ids != party_ids
                 || current_party_supports != party_supports
             {
-                let Some((cards, nps)) = self.read_attack_state(&current_party_ids, true, false)
+                let Some((cards, nps)) = self.read_attack_state(&current_party_ids, true, false)?
                 else {
-                    return;
+                    return Ok(());
                 };
                 (cards, nps, current_party_ids, current_party_supports)
             } else {
@@ -178,16 +178,16 @@ impl Runner {
                     self.battle.advanced_turn_indices.insert(scene_index, 1);
                     if !startup_actions.is_empty() {
                         if !self.tap_at("Attack", ATTACK_SCREEN_RETURN) {
-                            return;
+                            return Ok(());
                         }
                         thread::sleep(ACTION_DELAY);
-                        if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT) {
+                        if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT)? {
                             self.fail_action(
                                 "Battle",
                                 "返回 Battle 执行启动行动",
                                 "等待攻击按钮超时".into(),
                             );
-                            return;
+                            return Ok(());
                         }
                         let prep_turn = BattleTurn {
                             id: scene.id.clone(),
@@ -201,19 +201,19 @@ impl Runner {
                             critical_strategy: CriticalAttackStrategy::default(),
                             advanced_card_strategy: AdvancedCardStrategy::default(),
                         };
-                        if !self.execute_turn_skills(&prep_turn) {
-                            return;
+                        if !self.execute_turn_skills(&prep_turn)? {
+                            return Ok(());
                         }
 
                         self.emit("Battle", "Turn 1 技能完成，进入自动战斗");
-                        if !self.tap_attack_button() {
-                            return;
+                        if !self.tap_attack_button()? {
+                            return Ok(());
                         }
                         thread::sleep(ACTION_DELAY);
                         let Some((next_cards, next_nps)) =
-                            self.read_attack_state(&startup_party_ids, true, false)
+                            self.read_attack_state(&startup_party_ids, true, false)?
                         else {
-                            return;
+                            return Ok(());
                         };
                         let picks = choose_advanced_auto_picks_with_crit(
                             &scene,
@@ -226,8 +226,8 @@ impl Runner {
                             self.config.grand_class,
                             self.config.prefer_higher_critical_chance,
                         );
-                        self.tap_picks("Attack", &picks, &next_cards, &startup_party_ids);
-                        return;
+                        self.tap_picks("Attack", &picks, &next_cards, &startup_party_ids)?;
+                        return Ok(());
                     }
 
                     let picks = choose_advanced_auto_picks_with_crit(
@@ -241,8 +241,8 @@ impl Runner {
                         self.config.grand_class,
                         self.config.prefer_higher_critical_chance,
                     );
-                    self.tap_picks("Attack", &picks, &cards, &startup_party_ids);
-                    return;
+                    self.tap_picks("Attack", &picks, &cards, &startup_party_ids)?;
+                    return Ok(());
                 }
 
                 if !advanced_startup_conditions_match(&scene, &cards, &party_ids, &party_supports) {
@@ -254,16 +254,16 @@ impl Runner {
                             &format!("启动条件未满足，执行控制行动 {}", control_index + 1),
                         );
                         if !self.tap_at("Attack", ATTACK_SCREEN_RETURN) {
-                            return;
+                            return Ok(());
                         }
                         thread::sleep(ACTION_DELAY);
-                        if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT) {
+                        if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT)? {
                             self.fail_action(
                                 "Battle",
                                 "返回 Battle 执行控制行动",
                                 "等待攻击按钮超时".into(),
                             );
-                            return;
+                            return Ok(());
                         }
                         let control_turn = BattleTurn {
                             id: format!("{}_control_{}", scene.id, control_index + 1),
@@ -277,16 +277,16 @@ impl Runner {
                             critical_strategy: CriticalAttackStrategy::default(),
                             advanced_card_strategy: AdvancedCardStrategy::default(),
                         };
-                        if !self.execute_turn_skills(&control_turn) {
-                            return;
+                        if !self.execute_turn_skills(&control_turn)? {
+                            return Ok(());
                         }
                         self.battle
                             .advanced_control_indices
                             .insert(scene_index, control_index + 1);
 
                         self.emit("Battle", "控制行动完成，返回指令卡攻击");
-                        if !self.tap_attack_button() {
-                            return;
+                        if !self.tap_attack_button()? {
+                            return Ok(());
                         }
                         thread::sleep(ACTION_DELAY);
                         let control_party_ids =
@@ -294,9 +294,9 @@ impl Runner {
                         let control_party_supports =
                             self.advanced_party_supports_after_control(&scene, control_index + 1);
                         let Some((next_cards, _next_nps)) =
-                            self.read_attack_state(&control_party_ids, true, false)
+                            self.read_attack_state(&control_party_ids, true, false)?
                         else {
-                            return;
+                            return Ok(());
                         };
                         let picks = choose_advanced_auto_picks_with_crit(
                             &scene,
@@ -309,8 +309,8 @@ impl Runner {
                             self.config.grand_class,
                             self.config.prefer_higher_critical_chance,
                         );
-                        self.tap_picks("Attack", &picks, &next_cards, &control_party_ids);
-                        return;
+                        self.tap_picks("Attack", &picks, &next_cards, &control_party_ids)?;
+                        return Ok(());
                     }
 
                     self.emit("Attack", "启动条件未满足，按自动优先级攻击且不释放宝具");
@@ -325,8 +325,8 @@ impl Runner {
                         self.config.grand_class,
                         self.config.prefer_higher_critical_chance,
                     );
-                    self.tap_picks("Attack", &picks, &cards, &party_ids);
-                    return;
+                    self.tap_picks("Attack", &picks, &cards, &party_ids)?;
+                    return Ok(());
                 }
 
                 self.emit("Attack", "启动条件满足，执行 Turn 1 技能");
@@ -370,16 +370,16 @@ impl Runner {
                 self.battle.advanced_turn_indices.insert(scene_index, 1);
                 if !startup_actions.is_empty() {
                     if !self.tap_at("Attack", ATTACK_SCREEN_RETURN) {
-                        return;
+                        return Ok(());
                     }
                     thread::sleep(ACTION_DELAY);
-                    if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT) {
+                    if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT)? {
                         self.fail_action(
                             "Battle",
                             "返回 Battle 执行启动行动",
                             "等待攻击按钮超时".into(),
                         );
-                        return;
+                        return Ok(());
                     }
                     let prep_turn = BattleTurn {
                         id: scene.id.clone(),
@@ -393,19 +393,19 @@ impl Runner {
                         critical_strategy: CriticalAttackStrategy::default(),
                         advanced_card_strategy: AdvancedCardStrategy::default(),
                     };
-                    if !self.execute_turn_skills(&prep_turn) {
-                        return;
+                    if !self.execute_turn_skills(&prep_turn)? {
+                        return Ok(());
                     }
 
                     self.emit("Battle", "Turn 1 技能完成，进入自动战斗");
-                    if !self.tap_attack_button() {
-                        return;
+                    if !self.tap_attack_button()? {
+                        return Ok(());
                     }
                     thread::sleep(ACTION_DELAY);
                     let Some((next_cards, next_nps)) =
-                        self.read_attack_state(&startup_party_ids, true, false)
+                        self.read_attack_state(&startup_party_ids, true, false)?
                     else {
-                        return;
+                        return Ok(());
                     };
                     let picks = choose_advanced_auto_picks_with_crit(
                         &scene,
@@ -418,8 +418,8 @@ impl Runner {
                         self.config.grand_class,
                         self.config.prefer_higher_critical_chance,
                     );
-                    self.tap_picks("Attack", &picks, &next_cards, &startup_party_ids);
-                    return;
+                    self.tap_picks("Attack", &picks, &next_cards, &startup_party_ids)?;
+                    return Ok(());
                 }
 
                 let picks = choose_advanced_auto_picks_with_crit(
@@ -433,8 +433,8 @@ impl Runner {
                     self.config.grand_class,
                     self.config.prefer_higher_critical_chance,
                 );
-                self.tap_picks("Attack", &picks, &cards, &startup_party_ids);
-                return;
+                self.tap_picks("Attack", &picks, &cards, &startup_party_ids)?;
+                return Ok(());
             }
 
             let executed_control_count = *self
@@ -484,16 +484,16 @@ impl Runner {
                         &format!("自动战斗执行本回合控制行动 {next_control_count}"),
                     );
                     if !self.tap_at("Attack", ATTACK_SCREEN_RETURN) {
-                        return;
+                        return Ok(());
                     }
                     thread::sleep(ACTION_DELAY);
-                    if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT) {
+                    if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT)? {
                         self.fail_action(
                             "Battle",
                             "返回 Battle 执行控制行动",
                             "等待攻击按钮超时".into(),
                         );
-                        return;
+                        return Ok(());
                     }
                     let control_turn = BattleTurn {
                         id: format!("{}_auto_control_{}", scene.id, next_control_count),
@@ -507,19 +507,19 @@ impl Runner {
                         critical_strategy: CriticalAttackStrategy::default(),
                         advanced_card_strategy: AdvancedCardStrategy::default(),
                     };
-                    if !self.execute_turn_skills(&control_turn) {
-                        return;
+                    if !self.execute_turn_skills(&control_turn)? {
+                        return Ok(());
                     }
 
                     self.emit("Battle", "控制行动完成，返回指令卡攻击");
-                    if !self.tap_attack_button() {
-                        return;
+                    if !self.tap_attack_button()? {
+                        return Ok(());
                     }
                     thread::sleep(ACTION_DELAY);
                     let Some((next_cards, next_nps)) =
-                        self.read_attack_state(&control_party_ids, true, false)
+                        self.read_attack_state(&control_party_ids, true, false)?
                     else {
-                        return;
+                        return Ok(());
                     };
                     let picks = choose_advanced_auto_picks_with_crit(
                         &scene,
@@ -532,8 +532,8 @@ impl Runner {
                         self.config.grand_class,
                         self.config.prefer_higher_critical_chance,
                     );
-                    self.tap_picks("Attack", &picks, &next_cards, &control_party_ids);
-                    return;
+                    self.tap_picks("Attack", &picks, &next_cards, &control_party_ids)?;
+                    return Ok(());
                 }
 
                 let picks = choose_advanced_auto_picks_with_crit(
@@ -547,8 +547,8 @@ impl Runner {
                     self.config.grand_class,
                     self.config.prefer_higher_critical_chance,
                 );
-                self.tap_picks("Attack", &picks, &cards, &control_party_ids);
-                return;
+                self.tap_picks("Attack", &picks, &cards, &control_party_ids)?;
+                return Ok(());
             }
             let active_party_ids = self.advanced_party_ids_after_startup_flow(
                 &scene,
@@ -571,8 +571,8 @@ impl Runner {
                 self.config.grand_class,
                 self.config.prefer_higher_critical_chance,
             );
-            self.tap_picks("Attack", &picks, &cards, &active_party_ids);
-            return;
+            self.tap_picks("Attack", &picks, &cards, &active_party_ids)?;
+            return Ok(());
         }
 
         let mut cards = cards;
@@ -611,16 +611,16 @@ impl Runner {
                     &format!("高级规则 {} 命中，返回执行准备行动", rule_index + 1),
                 );
                 if !self.tap_at("Attack", ATTACK_SCREEN_RETURN) {
-                    return;
+                    return Ok(());
                 }
                 thread::sleep(ACTION_DELAY);
-                if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT) {
+                if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT)? {
                     self.fail_action(
                         "Battle",
                         "返回 Battle 执行高级规则准备行动",
                         "等待攻击按钮超时".into(),
                     );
-                    return;
+                    return Ok(());
                 }
                 let prep_turn = BattleTurn {
                     id: rule.id.clone(),
@@ -634,18 +634,19 @@ impl Runner {
                     critical_strategy: CriticalAttackStrategy::default(),
                     advanced_card_strategy: AdvancedCardStrategy::default(),
                 };
-                if !self.execute_turn_skills(&prep_turn) {
-                    return;
+                if !self.execute_turn_skills(&prep_turn)? {
+                    return Ok(());
                 }
 
                 self.emit("Battle", "高级规则准备行动完成，重新进入指令卡");
-                if !self.tap_attack_button() {
-                    return;
+                if !self.tap_attack_button()? {
+                    return Ok(());
                 }
                 thread::sleep(ACTION_DELAY);
-                let Some((next_cards, next_nps)) = self.read_attack_state(&party_ids, true, false)
+                let Some((next_cards, next_nps)) =
+                    self.read_attack_state(&party_ids, true, false)?
                 else {
-                    return;
+                    return Ok(());
                 };
                 cards = next_cards;
                 nps = next_nps;
@@ -660,8 +661,8 @@ impl Runner {
                         &party_ids,
                         &party_supports,
                         Some(&attack_priority),
-                    );
-                    return;
+                    )?;
+                    return Ok(());
                 }
                 next_rule_index = rule_index + 1;
                 continue;
@@ -678,14 +679,15 @@ impl Runner {
                     &party_ids,
                     &party_supports,
                     Some(&attack_priority),
-                );
-                return;
+                )?;
+                return Ok(());
             }
 
             next_rule_index = rule_index + 1;
         }
 
         self.emit("Attack", "无高级规则命中攻击，按默认顺序补位");
-        self.pick_and_tap_attack_cards(&cards, &nps, &party_ids, &party_supports, None);
+        self.pick_and_tap_attack_cards(&cards, &nps, &party_ids, &party_supports, None)?;
+        Ok(())
     }
 }

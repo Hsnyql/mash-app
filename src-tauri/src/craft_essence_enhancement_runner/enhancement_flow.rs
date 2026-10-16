@@ -4,33 +4,37 @@ use super::*;
 
 impl CraftEssenceEnhancementRunner {
     #[cfg(any())]
-    pub(super) fn handle_selected_main(&mut self, template_ready: bool) -> bool {
+    pub(super) fn handle_selected_main(&mut self, template_ready: bool) -> AutomationResult<bool> {
         let ready = if template_ready {
             self.enhance_button_absent_recovery_taps = 0;
             true
         } else {
-            let button_match = match self.sidecar().find_element_by_name(
-                None,
-                SCREEN_NAME,
-                "button_enhancement_ready",
-            ) {
+            let button_match = match self
+                .sidecar()
+                .find_element_by_name(None, SCREEN_NAME, "button_enhancement_ready")
+                .recoverable()?
+            {
                 Ok(button_match) => button_match,
                 Err(err) => {
                     self.fail(
                         "CraftEssenceEnhancement",
                         format!("识别强化按钮失败: {err}"),
                     );
-                    return false;
+                    return Ok(false);
                 }
             };
-            let mean_luma = match self.sidecar().read_region_luma(None, ENHANCE_BUTTON_REGION) {
+            let mean_luma = match self
+                .sidecar()
+                .read_region_luma(None, ENHANCE_BUTTON_REGION)
+                .recoverable()?
+            {
                 Ok(mean_luma) => mean_luma,
                 Err(err) => {
                     self.fail(
                         "CraftEssenceEnhancement",
                         format!("读取强化按钮亮度失败: {err}"),
                     );
-                    return false;
+                    return Ok(false);
                 }
             };
             match classify_enhancement_button(button_match.score, mean_luma) {
@@ -46,7 +50,7 @@ impl CraftEssenceEnhancementRunner {
                                 button_match.score
                             ),
                         );
-                        return false;
+                        return Ok(false);
                     }
                     self.emit(
                         "EnhancementResultRecovery",
@@ -56,10 +60,10 @@ impl CraftEssenceEnhancementRunner {
                         ),
                     );
                     if !self.tap_at("EnhancementResultRecovery", ENHANCEMENT_SKIP_BUTTON) {
-                        return false;
+                        return Ok(false);
                     }
                     thread::sleep(Duration::from_millis(700));
-                    return true;
+                    return Ok(true);
                 }
                 EnhancementReadyState::Ready => {
                     self.enhance_button_absent_recovery_taps = 0;
@@ -86,7 +90,7 @@ impl CraftEssenceEnhancementRunner {
                         ),
                     );
                     thread::sleep(Duration::from_millis(500));
-                    return true;
+                    return Ok(true);
                 }
             }
         };
@@ -98,68 +102,70 @@ impl CraftEssenceEnhancementRunner {
                 self.post_enhancement_not_ready_checks.saturating_add(1);
         }
 
-        match selected_main_action(
-            ready,
-            self.recommend_execute_tapped,
-            self.completed_enhancements,
-            self.post_enhancement_not_ready_checks,
-        ) {
-            SelectedMainAction::OpenRecommendation => {
-                if self.recommend_open_attempts >= RECOMMEND_OPEN_MAX_ATTEMPTS {
-                    self.fail(
+        Ok(
+            match selected_main_action(
+                ready,
+                self.recommend_execute_tapped,
+                self.completed_enhancements,
+                self.post_enhancement_not_ready_checks,
+            ) {
+                SelectedMainAction::OpenRecommendation => {
+                    if self.recommend_open_attempts >= RECOMMEND_OPEN_MAX_ATTEMPTS {
+                        self.fail(
+                            "CraftEssenceEnhancement",
+                            "多次点击推荐选择后，对话框仍未打开".into(),
+                        );
+                        return Ok(false);
+                    }
+                    self.emit("CraftEssenceEnhancement", "打开推荐强化素材设置");
+                    if !self.tap_at("CraftEssenceEnhancement", RECOMMEND_MATERIAL_BUTTON) {
+                        return Ok(false);
+                    }
+                    self.recommend_open_attempts += 1;
+                    thread::sleep(Duration::from_millis(800));
+                    true
+                }
+                SelectedMainAction::WaitForAutoSelection => {
+                    self.emit("CraftEssenceEnhancement", "等待自动配置强化素材");
+                    thread::sleep(Duration::from_millis(700));
+                    true
+                }
+                SelectedMainAction::Enhance => {
+                    if self.enhance_open_attempts >= ENHANCE_OPEN_MAX_ATTEMPTS {
+                        self.fail(
+                            "CraftEssenceEnhancement",
+                            "多次点击强化按钮后，确认对话框仍未打开".into(),
+                        );
+                        return Ok(false);
+                    }
+                    self.emit(
                         "CraftEssenceEnhancement",
-                        "多次点击推荐选择后，对话框仍未打开".into(),
+                        &format!("开始第 {} 次强化", self.completed_enhancements + 1),
                     );
-                    return false;
-                }
-                self.emit("CraftEssenceEnhancement", "打开推荐强化素材设置");
-                if !self.tap_at("CraftEssenceEnhancement", RECOMMEND_MATERIAL_BUTTON) {
-                    return false;
-                }
-                self.recommend_open_attempts += 1;
-                thread::sleep(Duration::from_millis(800));
-                true
-            }
-            SelectedMainAction::WaitForAutoSelection => {
-                self.emit("CraftEssenceEnhancement", "等待自动配置强化素材");
-                thread::sleep(Duration::from_millis(700));
-                true
-            }
-            SelectedMainAction::Enhance => {
-                if self.enhance_open_attempts >= ENHANCE_OPEN_MAX_ATTEMPTS {
-                    self.fail(
+                    if !self.tap_probe_or_point(
                         "CraftEssenceEnhancement",
-                        "多次点击强化按钮后，确认对话框仍未打开".into(),
+                        "button_enhancement_ready",
+                        ENHANCE_BUTTON,
+                    )? {
+                        return Ok(false);
+                    }
+                    self.enhance_open_attempts += 1;
+                    thread::sleep(Duration::from_millis(800));
+                    true
+                }
+                SelectedMainAction::Finished => {
+                    self.transition(LifecycleEvent::Finished);
+                    self.emit(
+                        "CraftEssenceEnhancement",
+                        &format!(
+                            "自动强化结束：概念礼装已满级或没有可用强化素材（共完成 {} 次强化）",
+                            self.completed_enhancements
+                        ),
                     );
-                    return false;
+                    false
                 }
-                self.emit(
-                    "CraftEssenceEnhancement",
-                    &format!("开始第 {} 次强化", self.completed_enhancements + 1),
-                );
-                if !self.tap_probe_or_point(
-                    "CraftEssenceEnhancement",
-                    "button_enhancement_ready",
-                    ENHANCE_BUTTON,
-                ) {
-                    return false;
-                }
-                self.enhance_open_attempts += 1;
-                thread::sleep(Duration::from_millis(800));
-                true
-            }
-            SelectedMainAction::Finished => {
-                self.transition(LifecycleEvent::Finished);
-                self.emit(
-                    "CraftEssenceEnhancement",
-                    &format!(
-                        "自动强化结束：概念礼装已满级或没有可用强化素材（共完成 {} 次强化）",
-                        self.completed_enhancements
-                    ),
-                );
-                false
-            }
-        }
+            },
+        )
     }
 
     pub(super) fn handle_enhancement_confirm_dialog(&mut self) -> bool {
@@ -230,54 +236,61 @@ impl CraftEssenceEnhancementRunner {
         true
     }
 
-    pub(super) fn handle_enhancement_return(&mut self, screen: Screen) -> bool {
-        match enhancement_return_action(screen, self.enhancement_left_main) {
-            EnhancementReturnAction::ObserveReturnedMain => {
-                self.enhancement_main_return_checks =
-                    self.enhancement_main_return_checks.saturating_add(1);
-                self.emit("EnhancementAnimation", "确认已返回概念礼装强化页面");
-                if !self.tap_at("EnhancementAnimation", ENHANCEMENT_SKIP_BUTTON) {
-                    return false;
-                }
-                thread::sleep(Duration::from_millis(700));
-                if !enhancement_main_return_confirmed(self.enhancement_main_return_checks) {
-                    return true;
-                }
-                let target = match self.sidecar().read_craft_essence_main_target(None) {
-                    Ok(target) => target,
-                    Err(err) => {
-                        self.post_enhancement_target_read_failures =
-                            self.post_enhancement_target_read_failures.saturating_add(1);
-                        if self.post_enhancement_target_read_failures >= GRID_READ_MAX_FAILURES {
-                            self.fail(
-                                "CraftEssenceEnhancement",
-                                format!("强化后读取目标等级上限失败: {err}"),
-                            );
-                            return false;
-                        }
-                        self.emit(
-                            "CraftEssenceEnhancement",
-                            "强化后目标等级上限读取不稳定，原地重试",
-                        );
-                        return true;
+    pub(super) fn handle_enhancement_return(&mut self, screen: Screen) -> AutomationResult<bool> {
+        Ok(
+            match enhancement_return_action(screen, self.enhancement_left_main) {
+                EnhancementReturnAction::ObserveReturnedMain => {
+                    self.enhancement_main_return_checks =
+                        self.enhancement_main_return_checks.saturating_add(1);
+                    self.emit("EnhancementAnimation", "确认已返回概念礼装强化页面");
+                    if !self.tap_at("EnhancementAnimation", ENHANCEMENT_SKIP_BUTTON) {
+                        return Ok(false);
                     }
-                };
-                let completed_stage = match complete_pending_enhancement(
-                    &mut self.pending_enhancement_stage,
-                    &target,
-                ) {
-                    Ok(stage) => stage,
-                    Err(EnhancementCompletionError::TargetUnreadable) => {
-                        self.post_enhancement_target_read_failures =
-                            self.post_enhancement_target_read_failures.saturating_add(1);
-                        if self.post_enhancement_target_read_failures >= GRID_READ_MAX_FAILURES {
-                            self.fail(
+                    thread::sleep(Duration::from_millis(700));
+                    if !enhancement_main_return_confirmed(self.enhancement_main_return_checks) {
+                        return Ok(true);
+                    }
+                    let target = match self
+                        .sidecar()
+                        .read_craft_essence_main_target(None)
+                        .recoverable()?
+                    {
+                        Ok(target) => target,
+                        Err(err) => {
+                            self.post_enhancement_target_read_failures =
+                                self.post_enhancement_target_read_failures.saturating_add(1);
+                            if self.post_enhancement_target_read_failures >= GRID_READ_MAX_FAILURES
+                            {
+                                self.fail(
+                                    "CraftEssenceEnhancement",
+                                    format!("强化后读取目标等级上限失败: {err}"),
+                                );
+                                return Ok(false);
+                            }
+                            self.emit(
                                 "CraftEssenceEnhancement",
-                                format!("强化后无法确认目标等级上限（OCR：{}）", target.text),
+                                "强化后目标等级上限读取不稳定，原地重试",
                             );
-                            return false;
+                            return Ok(true);
                         }
-                        self.emit(
+                    };
+                    let completed_stage = match complete_pending_enhancement(
+                        &mut self.pending_enhancement_stage,
+                        &target,
+                    ) {
+                        Ok(stage) => stage,
+                        Err(EnhancementCompletionError::TargetUnreadable) => {
+                            self.post_enhancement_target_read_failures =
+                                self.post_enhancement_target_read_failures.saturating_add(1);
+                            if self.post_enhancement_target_read_failures >= GRID_READ_MAX_FAILURES
+                            {
+                                self.fail(
+                                    "CraftEssenceEnhancement",
+                                    format!("强化后无法确认目标等级上限（OCR：{}）", target.text),
+                                );
+                                return Ok(false);
+                            }
+                            self.emit(
                             "CraftEssenceEnhancement",
                             &format!(
                                 "强化后暂未识别到目标等级上限，原地重试（{}/{GRID_READ_MAX_FAILURES}，OCR：{}）",
@@ -285,17 +298,17 @@ impl CraftEssenceEnhancementRunner {
                                 target.text
                             ),
                         );
-                        return true;
-                    }
-                    Err(EnhancementCompletionError::CapMismatch { expected, actual }) => {
-                        let expected_label = if self.pending_enhancement_stage
-                            == Some(StrategyStage::PacketAutoFeedPending)
-                        {
-                            "20/30/40/50".to_string()
-                        } else {
-                            expected.to_string()
-                        };
-                        self.fail(
+                            return Ok(true);
+                        }
+                        Err(EnhancementCompletionError::CapMismatch { expected, actual }) => {
+                            let expected_label = if self.pending_enhancement_stage
+                                == Some(StrategyStage::PacketAutoFeedPending)
+                            {
+                                "20/30/40/50".to_string()
+                            } else {
+                                expected.to_string()
+                            };
+                            self.fail(
                             "CraftEssenceEnhancement",
                             format!(
                                 "强化后目标等级上限校验失败：识别为 {}/{}，当前阶段要求上限 {expected_label}；不会登记本次产物",
@@ -303,182 +316,185 @@ impl CraftEssenceEnhancementRunner {
                                 actual.unwrap_or(0)
                             ),
                         );
-                        return false;
-                    }
-                    Err(EnhancementCompletionError::MissingPending) => {
-                        self.fail(
-                            "CraftEssenceEnhancement",
-                            "强化返回时没有待结算记录，拒绝重复结算".into(),
-                        );
-                        return false;
-                    }
-                    Err(EnhancementCompletionError::IllegalStage(stage)) => {
-                        self.fail(
-                            "CraftEssenceEnhancement",
-                            format!("强化返回记录包含非法策略阶段: {stage:?}"),
-                        );
-                        return false;
-                    }
-                };
-                if !target.found {
-                    self.emit(
-                        "CraftEssenceEnhancement",
-                        &format!(
-                            "强化后当前等级读取不完整，已由独立上限证据确认上限 {}",
-                            target.level_cap.unwrap_or(0)
-                        ),
-                    );
-                }
-                self.awaiting_enhancement_return = false;
-                self.enhancement_left_main = false;
-                self.enhancement_return_waits = 0;
-                self.enhancement_main_return_checks = 0;
-                self.post_enhancement_target_read_failures = 0;
-                self.enhance_open_attempts = 0;
-                self.completed_enhancements += 1;
-                self.materials_committed = false;
-                self.material_seen_cells.clear();
-                match completed_stage {
-                    StrategyStage::BombBaseSelected => {
-                        self.strategy_stage = StrategyStage::FindBombBaseToLock;
-                    }
-                    StrategyStage::PacketSelected => {
-                        self.strategy_stage = next_packet_stage_after_enhancement(
-                            completed_stage,
-                            self.packet_fingerprints.len(),
-                        )
-                        .expect("packet break stage must advance to automatic feed");
-                        self.recommend_ready_waits = 0;
-                        self.recommend_executed_for_target = false;
-                        self.enhance_open_attempts = 0;
-                        self.emit(
-                            "CraftEssenceEnhancement",
-                            "同名礼装强化完成，经验包已 1 破；等待游戏自动配置下一次素材",
-                        );
-                    }
-                    StrategyStage::PacketAutoFeedPending => {
-                        self.packet_fingerprints
-                            .push(self.packet_fingerprint.clone());
-                        self.packet_fingerprint.clear();
-                        self.strategy_stage = next_packet_stage_after_enhancement(
-                            completed_stage,
-                            self.packet_fingerprints.len(),
-                        )
-                        .expect("packet automatic feed stage must advance after one enhancement");
-                    }
-                    StrategyStage::FastAutoFeedPending => {
-                        self.current_bomb_level = target
-                            .level
-                            .expect("fast strategy requires a readable level");
-                        if fast_bomb_is_complete(&target) {
-                            self.transition(LifecycleEvent::Finished);
-                            self.emit(
-                                "CraftEssenceEnhancement",
-                                &format!(
-                                    "当前丸子已强化至 50 级（共完成 {} 次强化）",
-                                    self.completed_enhancements
-                                ),
-                            );
-                            return false;
+                            return Ok(false);
                         }
-                        self.recommend_ready_waits = 0;
-                        self.enhance_open_attempts = 0;
+                        Err(EnhancementCompletionError::MissingPending) => {
+                            self.fail(
+                                "CraftEssenceEnhancement",
+                                "强化返回时没有待结算记录，拒绝重复结算".into(),
+                            );
+                            return Ok(false);
+                        }
+                        Err(EnhancementCompletionError::IllegalStage(stage)) => {
+                            self.fail(
+                                "CraftEssenceEnhancement",
+                                format!("强化返回记录包含非法策略阶段: {stage:?}"),
+                            );
+                            return Ok(false);
+                        }
+                    };
+                    if !target.found {
                         self.emit(
                             "CraftEssenceEnhancement",
                             &format!(
-                                "当前丸子已强化至 {}/50，等待自动配置下一批素材",
-                                self.current_bomb_level
+                                "强化后当前等级读取不完整，已由独立上限证据确认上限 {}",
+                                target.level_cap.unwrap_or(0)
                             ),
                         );
                     }
-                    StrategyStage::BombSelectedForFeed => {
-                        self.packet_fingerprints.clear();
-                        self.packet_feed_remaining.clear();
-                        self.feed_inventory_packets = false;
-                        self.strategy_stage = StrategyStage::InspectBomb;
+                    self.awaiting_enhancement_return = false;
+                    self.enhancement_left_main = false;
+                    self.enhancement_return_waits = 0;
+                    self.enhancement_main_return_checks = 0;
+                    self.post_enhancement_target_read_failures = 0;
+                    self.enhance_open_attempts = 0;
+                    self.completed_enhancements += 1;
+                    self.materials_committed = false;
+                    self.material_seen_cells.clear();
+                    match completed_stage {
+                        StrategyStage::BombBaseSelected => {
+                            self.strategy_stage = StrategyStage::FindBombBaseToLock;
+                        }
+                        StrategyStage::PacketSelected => {
+                            self.strategy_stage = next_packet_stage_after_enhancement(
+                                completed_stage,
+                                self.packet_fingerprints.len(),
+                            )
+                            .expect("packet break stage must advance to automatic feed");
+                            self.recommend_ready_waits = 0;
+                            self.recommend_executed_for_target = false;
+                            self.enhance_open_attempts = 0;
+                            self.emit(
+                                "CraftEssenceEnhancement",
+                                "同名礼装强化完成，经验包已 1 破；等待游戏自动配置下一次素材",
+                            );
+                        }
+                        StrategyStage::PacketAutoFeedPending => {
+                            self.packet_fingerprints
+                                .push(self.packet_fingerprint.clone());
+                            self.packet_fingerprint.clear();
+                            self.strategy_stage = next_packet_stage_after_enhancement(
+                                completed_stage,
+                                self.packet_fingerprints.len(),
+                            )
+                            .expect(
+                                "packet automatic feed stage must advance after one enhancement",
+                            );
+                        }
+                        StrategyStage::FastAutoFeedPending => {
+                            self.current_bomb_level = target
+                                .level
+                                .expect("fast strategy requires a readable level");
+                            if fast_bomb_is_complete(&target) {
+                                self.transition(LifecycleEvent::Finished);
+                                self.emit(
+                                    "CraftEssenceEnhancement",
+                                    &format!(
+                                        "当前丸子已强化至 50 级（共完成 {} 次强化）",
+                                        self.completed_enhancements
+                                    ),
+                                );
+                                return Ok(false);
+                            }
+                            self.recommend_ready_waits = 0;
+                            self.enhance_open_attempts = 0;
+                            self.emit(
+                                "CraftEssenceEnhancement",
+                                &format!(
+                                    "当前丸子已强化至 {}/50，等待自动配置下一批素材",
+                                    self.current_bomb_level
+                                ),
+                            );
+                        }
+                        StrategyStage::BombSelectedForFeed => {
+                            self.packet_fingerprints.clear();
+                            self.packet_feed_remaining.clear();
+                            self.feed_inventory_packets = false;
+                            self.strategy_stage = StrategyStage::InspectBomb;
+                        }
+                        _ => unreachable!("completed stage was validated before state transition"),
                     }
-                    _ => unreachable!("completed stage was validated before state transition"),
-                }
-                self.emit(
-                    "CraftEssenceEnhancement",
-                    &format!(
-                        "第 {} 次强化完成，检查下一轮素材",
-                        self.completed_enhancements
-                    ),
-                );
-                true
-            }
-            EnhancementReturnAction::WaitForConfirmationClose => {
-                self.enhancement_main_return_checks = 0;
-                self.enhancement_return_waits = self.enhancement_return_waits.saturating_add(1);
-                if self.enhancement_return_waits >= ENHANCEMENT_RETURN_MAX_WAITS {
-                    self.fail(
-                        "EnhancementConfirmDialog",
-                        "点击决定后，强化确认对话框仍未关闭".into(),
+                    self.emit(
+                        "CraftEssenceEnhancement",
+                        &format!(
+                            "第 {} 次强化完成，检查下一轮素材",
+                            self.completed_enhancements
+                        ),
                     );
-                    return false;
+                    true
                 }
-                thread::sleep(Duration::from_millis(500));
-                true
-            }
-            EnhancementReturnAction::CloseExpOverflow => {
-                self.enhancement_main_return_checks = 0;
-                self.enhancement_left_main = true;
-                self.enhancement_return_waits = self.enhancement_return_waits.saturating_add(1);
-                if self.enhancement_return_waits >= ENHANCEMENT_RETURN_MAX_WAITS {
-                    self.fail(
+                EnhancementReturnAction::WaitForConfirmationClose => {
+                    self.enhancement_main_return_checks = 0;
+                    self.enhancement_return_waits = self.enhancement_return_waits.saturating_add(1);
+                    if self.enhancement_return_waits >= ENHANCEMENT_RETURN_MAX_WAITS {
+                        self.fail(
+                            "EnhancementConfirmDialog",
+                            "点击决定后，强化确认对话框仍未关闭".into(),
+                        );
+                        return Ok(false);
+                    }
+                    thread::sleep(Duration::from_millis(500));
+                    true
+                }
+                EnhancementReturnAction::CloseExpOverflow => {
+                    self.enhancement_main_return_checks = 0;
+                    self.enhancement_left_main = true;
+                    self.enhancement_return_waits = self.enhancement_return_waits.saturating_add(1);
+                    if self.enhancement_return_waits >= ENHANCEMENT_RETURN_MAX_WAITS {
+                        self.fail(
+                            "EnhancementAnimation",
+                            "经验值溢出提示持续未关闭，等待概念礼装强化结束超时".into(),
+                        );
+                        return Ok(false);
+                    }
+                    self.emit(
                         "EnhancementAnimation",
-                        "经验值溢出提示持续未关闭，等待概念礼装强化结束超时".into(),
+                        "检测到大成功或极大成功导致经验值溢出，关闭未使用素材提示",
                     );
-                    return false;
+                    if !self.tap_at("EnhancementAnimation", EXP_OVERFLOW_CLOSE_BUTTON) {
+                        return Ok(false);
+                    }
+                    thread::sleep(Duration::from_millis(700));
+                    true
                 }
-                self.emit(
-                    "EnhancementAnimation",
-                    "检测到大成功或极大成功导致经验值溢出，关闭未使用素材提示",
-                );
-                if !self.tap_at("EnhancementAnimation", EXP_OVERFLOW_CLOSE_BUTTON) {
-                    return false;
-                }
-                thread::sleep(Duration::from_millis(700));
-                true
-            }
-            EnhancementReturnAction::TapSkip { mark_left_main } => {
-                self.enhancement_main_return_checks = 0;
-                self.enhancement_left_main |= mark_left_main;
-                self.enhancement_return_waits = self.enhancement_return_waits.saturating_add(1);
-                if self.enhancement_return_waits >= ENHANCEMENT_RETURN_MAX_WAITS {
-                    self.fail(
+                EnhancementReturnAction::TapSkip { mark_left_main } => {
+                    self.enhancement_main_return_checks = 0;
+                    self.enhancement_left_main |= mark_left_main;
+                    self.enhancement_return_waits = self.enhancement_return_waits.saturating_add(1);
+                    if self.enhancement_return_waits >= ENHANCEMENT_RETURN_MAX_WAITS {
+                        self.fail(
+                            "EnhancementAnimation",
+                            if self.enhancement_left_main {
+                                "等待概念礼装强化结束超时"
+                            } else {
+                                "点击决定后未能确认进入强化动画"
+                            }
+                            .into(),
+                        );
+                        return Ok(false);
+                    }
+                    self.emit(
                         "EnhancementAnimation",
                         if self.enhancement_left_main {
-                            "等待概念礼装强化结束超时"
+                            "点击页面顶部跳过强化动画"
                         } else {
-                            "点击决定后未能确认进入强化动画"
-                        }
-                        .into(),
+                            "等待进入强化动画"
+                        },
                     );
-                    return false;
+                    if !self.tap_at("EnhancementAnimation", ENHANCEMENT_SKIP_BUTTON) {
+                        return Ok(false);
+                    }
+                    thread::sleep(Duration::from_millis(700));
+                    true
                 }
-                self.emit(
-                    "EnhancementAnimation",
-                    if self.enhancement_left_main {
-                        "点击页面顶部跳过强化动画"
-                    } else {
-                        "等待进入强化动画"
-                    },
-                );
-                if !self.tap_at("EnhancementAnimation", ENHANCEMENT_SKIP_BUTTON) {
-                    return false;
+                EnhancementReturnAction::Unexpected => {
+                    self.fail(
+                        "EnhancementAnimation",
+                        format!("强化动画期间进入了意外页面: {screen:?}"),
+                    );
+                    false
                 }
-                thread::sleep(Duration::from_millis(700));
-                true
-            }
-            EnhancementReturnAction::Unexpected => {
-                self.fail(
-                    "EnhancementAnimation",
-                    format!("强化动画期间进入了意外页面: {screen:?}"),
-                );
-                false
-            }
-        }
+            },
+        )
     }
 }

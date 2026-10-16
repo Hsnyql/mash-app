@@ -19,6 +19,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from typing import Optional
 
 import cv2
@@ -96,6 +97,7 @@ class ScrcpyStream:
         max_size: int = 0,
         bit_rate: int = 8_000_000,
         max_fps: int = 0,
+        display_id: int = 0,
     ) -> None:
         self.adb_path = adb_path
         self.jar_path = jar_path
@@ -103,6 +105,7 @@ class ScrcpyStream:
         self.max_size = max_size
         self.bit_rate = bit_rate
         self.max_fps = max_fps
+        self.display_id = display_id
 
         self.scid = random.randint(0, 0x7FFFFFFF)
         self.socket_name = f"scrcpy_{self.scid:08x}"
@@ -116,6 +119,9 @@ class ScrcpyStream:
 
         self._latest_frame: Optional[np.ndarray] = None
         self._latest_lock = threading.Lock()
+        self._stream_id = uuid.uuid4().hex
+        self._frame_id = 0
+        self._decoded_at_ms = None
 
         self.width = 0
         self.height = 0
@@ -189,6 +195,22 @@ class ScrcpyStream:
             self.port = None
 
     # -- frame access --------------------------------------------------------
+
+    def _publish_frame(self, bgr: np.ndarray) -> None:
+        with self._latest_lock:
+            self._latest_frame = bgr
+            self._frame_id += 1
+            self._decoded_at_ms = int(time.time() * 1000)
+
+    def get_latest_snapshot(self):
+        """Pixels and identity are read together under the frame lock."""
+        with self._latest_lock:
+            if self._latest_frame is None:
+                return None, None
+            image = self._latest_frame.copy()
+            return image, {"source": "scrcpy", "streamId": self._stream_id,
+                           "frameId": self._frame_id, "decodedAtMs": self._decoded_at_ms,
+                           "width": image.shape[1], "height": image.shape[0]}
 
     def get_latest_bgr(self) -> Optional[np.ndarray]:
         with self._latest_lock:
@@ -319,6 +341,7 @@ class ScrcpyStream:
             f"video_bit_rate={self.bit_rate}",
             f"max_size={self.max_size}",
             f"max_fps={self.max_fps}",
+            f"display_id={self.display_id}",
         ]
 
     def _connect_and_handshake_dummy(
@@ -430,8 +453,7 @@ class ScrcpyStream:
                     packet = av.Packet(payload)
                     for frame in codec.decode(packet):
                         bgr = frame.to_ndarray(format="bgr24")
-                        with self._latest_lock:
-                            self._latest_frame = bgr
+                        self._publish_frame(bgr)
                         if not first_frame_logged:
                             first_frame_logged = True
                             print(
@@ -456,7 +478,6 @@ class ScrcpyStream:
             try:
                 for frame in codec.decode(None):
                     bgr = frame.to_ndarray(format="bgr24")
-                    with self._latest_lock:
-                        self._latest_frame = bgr
+                    self._publish_frame(bgr)
             except Exception:  # noqa: BLE001
                 pass

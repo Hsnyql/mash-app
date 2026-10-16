@@ -28,6 +28,21 @@ impl Runner {
     // -- main loop -----------------------------------------------------------
 
     pub fn run(mut self) {
+        if let Err(message) = self.run_loop() {
+            self.transition_lifecycle(RunnerLifecycleEvent::Failed {
+                message: message.to_string(),
+            });
+            self.emit("CV", &message.to_string());
+            self.save_recognition_failure(&message.to_string());
+        }
+    }
+
+    fn run_loop(&mut self) -> AutomationResult<()> {
+        self.sidecar().use_battle_detection();
+        let timeout = self.config.unknown_screen_timeout_count;
+        if let Err(error) = self.sidecar().configure_recognition_diagnostics(timeout) {
+            self.emit_debug("CV", &error);
+        }
         self.transition_lifecycle(RunnerLifecycleEvent::WorkerStarted);
         if let Some(recorder) = &self.run_recorder {
             recorder.mark_running();
@@ -43,31 +58,34 @@ impl Runner {
             if self.is_cancelled() {
                 self.transition_lifecycle(RunnerLifecycleEvent::StopRequested);
                 self.emit("", "自动化已停止");
-                return;
+                return Ok(());
             }
 
-            let screen = match self.sidecar().detect(None) {
+            let screen = match self.sidecar().detect(None).recoverable()? {
                 Ok(s) => s,
                 Err(e) => {
-                    self.transition_lifecycle(RunnerLifecycleEvent::Failed { message: e.clone() });
+                    self.transition_lifecycle(RunnerLifecycleEvent::Failed {
+                        message: e.to_string(),
+                    });
                     self.emit("", &format!("画面识别失败: {e}"));
-                    return;
+                    self.save_recognition_failure(&e.to_string());
+                    return Ok(());
                 }
             };
 
             if support_search_screen_exited(last_detected_screen, screen) {
-                self.release_support_ocr();
+                self.release_support_ocr()?;
             }
 
             self.resolve_pending_ap_recovery(screen);
 
             if !self.observe_rank_up_quest_screen(screen) {
-                return;
+                return Ok(());
             }
 
-            if self.handle_battle_load_screen(screen) {
+            if self.handle_battle_load_screen(screen)? {
                 if matches!(*self.state.lock().unwrap(), RunnerState::Error { .. }) {
-                    return;
+                    return Ok(());
                 }
                 thread::sleep(POLL_INTERVAL);
                 continue;
@@ -90,12 +108,12 @@ impl Runner {
                 Screen::RankUpQuest => {
                     unknown_count = 0;
                     last_detected_screen = screen;
-                    self.handle_rank_up_quest();
+                    self.handle_rank_up_quest()?;
                 }
                 Screen::TeamConfirm => {
                     unknown_count = 0;
                     last_detected_screen = screen;
-                    self.handle_team_confirm();
+                    self.handle_team_confirm()?;
                 }
                 Screen::TeamChange => {
                     unknown_count = 0;
@@ -105,17 +123,17 @@ impl Runner {
                 Screen::SupportSelect => {
                     unknown_count = 0;
                     last_detected_screen = screen;
-                    self.handle_support_select();
+                    self.handle_support_select()?;
                 }
                 Screen::ServantSelect => {
                     unknown_count = 0;
                     last_detected_screen = screen;
-                    self.handle_servant_select();
+                    self.handle_servant_select()?;
                 }
                 Screen::Battle => {
                     unknown_count = 0;
                     last_detected_screen = screen;
-                    self.handle_battle();
+                    self.handle_battle()?;
                 }
                 Screen::Attack => {
                     unknown_count = 0;
@@ -127,7 +145,7 @@ impl Runner {
                             ATTACK_SUBMISSION_STUCK_TIMEOUT,
                         ) {
                             AttackSubmissionWaitGate::TimedOut => {
-                                self.recover_stuck_attack_selection();
+                                self.recover_stuck_attack_selection()?;
                             }
                             AttackSubmissionWaitGate::Waiting
                             | AttackSubmissionWaitGate::NotWaiting => {
@@ -137,28 +155,28 @@ impl Runner {
                     } else {
                         self.battle
                             .transition(BattleFlowEvent::AttackScreenDetected);
-                        self.handle_attack();
+                        self.handle_attack()?;
                     }
                 }
                 Screen::BattleResultBond => {
                     unknown_count = 0;
                     last_detected_screen = screen;
-                    self.handle_battle_result_bond();
+                    self.handle_battle_result_bond()?;
                 }
                 Screen::BattleResultExp => {
                     unknown_count = 0;
                     last_detected_screen = screen;
-                    self.handle_battle_result_exp();
+                    self.handle_battle_result_exp()?;
                 }
                 Screen::BattleResultLoot => {
                     unknown_count = 0;
                     last_detected_screen = screen;
-                    self.handle_battle_result_loot();
+                    self.handle_battle_result_loot()?;
                 }
                 Screen::BattleResultFriendRequest => {
                     unknown_count = 0;
                     last_detected_screen = screen;
-                    self.handle_battle_result_friend_request();
+                    self.handle_battle_result_friend_request()?;
                 }
                 Screen::BattleResultContinue => {
                     unknown_count = 0;
@@ -168,7 +186,7 @@ impl Runner {
                 Screen::APRecovery => {
                     unknown_count = 0;
                     last_detected_screen = screen;
-                    self.handle_ap_recovery();
+                    self.handle_ap_recovery()?;
                 }
                 Screen::Unknown => {
                     unknown_count += 1;
@@ -182,18 +200,6 @@ impl Runner {
                         self.transition_lifecycle(RunnerLifecycleEvent::Failed {
                             message: message.into(),
                         });
-                        if self.config.auto_capture_unknown_screen_timeout {
-                            match self.capture_unknown_screen_timeout_screenshot() {
-                                Ok(path) => self.emit(
-                                    "Unknown",
-                                    &format!("无法识别画面截图已保存: {}", path.display()),
-                                ),
-                                Err(err) => self.emit_warn(
-                                    "Unknown",
-                                    &format!("无法识别画面截图保存失败: {err}"),
-                                ),
-                            }
-                        }
                         self.emit(
                             if self.rank_up_quest_transition_message().is_some() {
                                 "RankUpQuest"
@@ -202,7 +208,8 @@ impl Runner {
                             },
                             &format!("{message}，已停止"),
                         );
-                        return;
+                        self.save_recognition_failure(message);
+                        return Ok(());
                     }
                     if let Some(message) = self.rank_up_quest_transition_message() {
                         self.emit(
@@ -235,12 +242,12 @@ impl Runner {
             }
 
             if matches!(*self.state.lock().unwrap(), RunnerState::Error { .. }) {
-                return;
+                return Ok(());
             }
 
             if matches!(*self.state.lock().unwrap(), RunnerState::Finished) {
                 self.emit("", "自动化已完成");
-                return;
+                return Ok(());
             }
 
             thread::sleep(POLL_INTERVAL);
@@ -251,47 +258,40 @@ impl Runner {
 
     /// Consume transient screen observations after a successful start tap.
     /// Keep the normal screen router from treating them as fresh setup pages.
-    fn handle_battle_load_screen(&mut self, screen: Screen) -> bool {
-        match self.battle.observe_battle_load(
-            screen,
-            Instant::now(),
-            self.config.unknown_screen_timeout_count,
-        ) {
-            BattleLoadGate::NotWaiting => false,
-            BattleLoadGate::Waiting => {
-                self.emit("TeamConfirm", "等待进入战斗页面…");
-                true
-            }
-            BattleLoadGate::RetryStart { attempt } => {
-                self.retry_quest_start(attempt);
-                true
-            }
-            gate @ (BattleLoadGate::TimedOut | BattleLoadGate::StartRetriesExhausted) => {
-                let message = if gate == BattleLoadGate::TimedOut {
-                    "等待进入战斗超时"
-                } else {
-                    "开始任务点击后仍停留在队伍确认页，已达到重试上限"
-                };
-                self.transition_lifecycle(RunnerLifecycleEvent::Failed {
-                    message: message.into(),
-                });
-                self.emit("TeamConfirm", &format!("{message}，已停止"));
-                if self.config.auto_capture_unknown_screen_timeout {
-                    match self.capture_unknown_screen_timeout_screenshot() {
-                        Ok(path) => self.emit(
-                            "TeamConfirm",
-                            &format!("开始任务超时截图已保存: {}", path.display()),
-                        ),
-                        Err(err) => self
-                            .emit_warn("TeamConfirm", &format!("开始任务超时截图保存失败: {err}")),
-                    }
+    fn handle_battle_load_screen(&mut self, screen: Screen) -> AutomationResult<bool> {
+        Ok(
+            match self.battle.observe_battle_load(
+                screen,
+                Instant::now(),
+                self.config.unknown_screen_timeout_count,
+            ) {
+                BattleLoadGate::NotWaiting => false,
+                BattleLoadGate::Waiting => {
+                    self.emit("TeamConfirm", "等待进入战斗页面…");
+                    true
                 }
-                true
-            }
-        }
+                BattleLoadGate::RetryStart { attempt } => {
+                    self.retry_quest_start(attempt)?;
+                    true
+                }
+                gate @ (BattleLoadGate::TimedOut | BattleLoadGate::StartRetriesExhausted) => {
+                    let message = if gate == BattleLoadGate::TimedOut {
+                        "等待进入战斗超时"
+                    } else {
+                        "开始任务点击后仍停留在队伍确认页，已达到重试上限"
+                    };
+                    self.transition_lifecycle(RunnerLifecycleEvent::Failed {
+                        message: message.into(),
+                    });
+                    self.emit("TeamConfirm", &format!("{message}，已停止"));
+                    self.save_recognition_failure(message);
+                    true
+                }
+            },
+        )
     }
 
-    fn handle_battle(&mut self) {
+    fn handle_battle(&mut self) -> AutomationResult<()> {
         match attack_screen_wait_gate(
             self.battle.attack_screen_wait_started_at(),
             Instant::now(),
@@ -299,7 +299,7 @@ impl Runner {
         ) {
             AttackScreenWaitGate::Waiting => {
                 self.emit("Battle", "已点击攻击按钮，等待指令卡画面…");
-                return;
+                return Ok(());
             }
             AttackScreenWaitGate::TimedOut => {
                 self.battle
@@ -313,12 +313,13 @@ impl Runner {
         let attack_present = self
             .sidecar()
             .find_element_by_name(None, BATTLE_SCREEN, ATTACK_BUTTON_ELEMENT)
+            .recoverable()?
             .map(|m| m.found)
             .unwrap_or(false);
 
         if !attack_present {
             self.emit("Battle", "等待战斗动作…");
-            return;
+            return Ok(());
         }
 
         let attack_returned_after_submit = self.battle.awaiting_attack_resolution();
@@ -327,11 +328,15 @@ impl Runner {
         }
 
         // Read the current battle scene (m of n) from the BATTLE label HUD.
-        let screen_scene = match self.sidecar().read_battle_scene(None, BATTLE_SCENE_REGION) {
+        let screen_scene = match self
+            .sidecar()
+            .read_battle_scene(None, BATTLE_SCENE_REGION)
+            .recoverable()?
+        {
             Ok(scene) => scene,
             Err(error) => {
-                self.fail_action("Battle", "读取战斗场次", error);
-                return;
+                self.fail_action("Battle", "读取战斗场次", error.to_string());
+                return Ok(());
             }
         };
         match post_attack_hud_read_gate(
@@ -352,7 +357,7 @@ impl Runner {
                 self.battle
                     .transition(BattleFlowEvent::PostAttackHudWaitStarted { at: started_at });
                 self.emit("Battle", "等待读取 Battle HUD…");
-                return;
+                return Ok(());
             }
             PostAttackHudReadGate::TimedOut => {
                 self.battle
@@ -442,8 +447,8 @@ impl Runner {
                         ),
                     );
                     let resolved_turn = self.resolve_normal_turn_for_current_members(&turn_cfg);
-                    if !self.execute_turn_skills(&resolved_turn) {
-                        return;
+                    if !self.execute_turn_skills(&resolved_turn)? {
+                        return Ok(());
                     }
                     self.battle.executed_turn_key = Some(turn_key);
                     self.battle.scene_config_used = true;
@@ -469,7 +474,7 @@ impl Runner {
                 self.battle.current_turn_index,
             ) {
                 if !over_configured_turns {
-                    self.select_enemy_target(turn_cfg.enemy_target.as_deref());
+                    self.select_enemy_target(turn_cfg.enemy_target.as_deref())?;
                 }
             }
         }
@@ -480,8 +485,8 @@ impl Runner {
                 .get(self.battle.current_scene_index)
                 .cloned()
             {
-                if !self.execute_next_grand_turn_skills(&scene) {
-                    return;
+                if !self.execute_next_grand_turn_skills(&scene)? {
+                    return Ok(());
                 }
             }
         }
@@ -494,8 +499,8 @@ impl Runner {
             {
                 let grand_servants = self.grand_servant_runtime_configs();
                 if grand_startup_can_run_before_attack(&scene, &grand_servants) {
-                    if !self.prepare_grand_startup_before_attack(&scene) {
-                        return;
+                    if !self.prepare_grand_startup_before_attack(&scene)? {
+                        return Ok(());
                     }
                 }
             }
@@ -508,14 +513,15 @@ impl Runner {
                 tick.needs_exec,
             )
             .map(str::to_owned);
-            self.select_enemy_target(target.as_deref());
+            self.select_enemy_target(target.as_deref())?;
         }
 
         // Click the attack button
         self.emit("Battle", "点击攻击按钮");
-        if !self.tap_attack_button() {
-            return;
+        if !self.tap_attack_button()? {
+            return Ok(());
         }
         thread::sleep(ACTION_DELAY);
+        Ok(())
     }
 }

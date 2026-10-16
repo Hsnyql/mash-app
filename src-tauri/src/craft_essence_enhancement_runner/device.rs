@@ -3,31 +3,35 @@
 use super::*;
 
 impl CraftEssenceEnhancementRunner {
-    pub(super) fn detect_screen(&mut self) -> Screen {
+    pub(super) fn detect_screen(&mut self) -> AutomationResult<Screen> {
         let mut snapshot = ProbeSnapshot::default();
         for probe in PROBES {
-            if self.probe(probe.element) {
+            if self.probe(probe.element)? {
                 snapshot.found.push(probe.key);
             }
         }
-        if self.probe("button_enhancement_ce_select_ce_desc") {
+        if self.probe("button_enhancement_ce_select_ce_desc")? {
             snapshot.found.push("button_enhancement_ce_select_ce_desc");
         }
-        classify_screen(&snapshot)
+        Ok(classify_screen(&snapshot))
     }
 
-    pub(super) fn probe(&mut self, element: &str) -> bool {
-        self.sidecar()
+    pub(super) fn probe(&mut self, element: &str) -> AutomationResult<bool> {
+        Ok(self
+            .sidecar()
             .find_element_by_name(None, SCREEN_NAME, element)
+            .recoverable()?
             .map(|result| result.found)
-            .unwrap_or(false)
+            .unwrap_or(false))
     }
 
-    pub(super) fn probe_score(&mut self, element: &str) -> f64 {
-        self.sidecar()
+    pub(super) fn probe_score(&mut self, element: &str) -> AutomationResult<f64> {
+        Ok(self
+            .sidecar()
             .find_element_by_name(None, SCREEN_NAME, element)
+            .recoverable()?
             .map(|result| result.score)
-            .unwrap_or(0.0)
+            .unwrap_or(0.0))
     }
 
     pub(super) fn tap_probe_or_point(
@@ -35,14 +39,15 @@ impl CraftEssenceEnhancementRunner {
         screen: &str,
         element: &str,
         fallback: Point,
-    ) -> bool {
+    ) -> AutomationResult<bool> {
         let point = self
             .sidecar()
             .find_element_by_name(None, SCREEN_NAME, element)
+            .recoverable()?
             .ok()
             .and_then(|result| result.found.then_some(Point::new(result.x, result.y)))
             .unwrap_or(fallback);
-        self.tap_at(screen, point)
+        Ok(self.tap_at(screen, point))
     }
 
     pub(super) fn tap_at(&mut self, screen: &str, point: Point) -> bool {
@@ -83,24 +88,24 @@ impl CraftEssenceEnhancementRunner {
             .expect("CE enhancement sidecar missing")
     }
 
-    pub(super) fn read_material_selected_count(&mut self) -> Result<u8, String> {
+    pub(super) fn read_material_selected_count(&mut self) -> AutomationResult<u8> {
         let ocr = self
             .sidecar()
             .ocr_region(None, MATERIAL_COUNTER_REGION)
-            .map_err(|error| format!("读取页面素材计数失败: {error}"))?;
+            .context("读取页面素材计数失败")?;
         let selected = parse_selected_count(&ocr.full_text)
             .ok_or_else(|| format!("无法安全识别页面素材计数: {:?}", ocr.full_text))?;
-        u8::try_from(selected)
+        Ok(u8::try_from(selected)
             .ok()
             .filter(|count| *count <= PACKET_BATCH_SIZE)
-            .ok_or_else(|| format!("页面素材计数超出安全范围: {selected}/20"))
+            .ok_or_else(|| format!("页面素材计数超出安全范围: {selected}/20"))?)
     }
 
-    pub(super) fn read_material_level_max_reached(&mut self) -> Result<bool, String> {
+    pub(super) fn read_material_level_max_reached(&mut self) -> AutomationResult<bool> {
         let ocr = self
             .sidecar()
             .ocr_region(None, ITEM_GRID_REGION)
-            .map_err(|error| format!("确认素材选择是否达到等级上限失败: {error}"))?;
+            .context("确认素材选择是否达到等级上限失败")?;
         Ok(material_level_max_text_detected(&ocr.full_text))
     }
 

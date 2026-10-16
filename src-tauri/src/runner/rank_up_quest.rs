@@ -163,15 +163,15 @@ impl Runner {
         self.battle = BattleState::new();
     }
 
-    pub(crate) fn handle_rank_up_quest(&mut self) {
+    pub(crate) fn handle_rank_up_quest(&mut self) -> AutomationResult<()> {
         let Some(mut runtime) = self.rank_up_quest.take() else {
-            return;
+            return Ok(());
         };
 
         if runtime.phase == RankUpQuestPhase::AwaitingDeparture {
             self.emit("RankUpQuest", "等待进入助战选择页面…");
             self.rank_up_quest = Some(runtime);
-            return;
+            return Ok(());
         }
         if rank_up_list_is_return(runtime.phase) {
             if rank_up_list_return_needs_completion_record(runtime.phase) {
@@ -187,13 +187,14 @@ impl Runner {
         }
         if runtime.phase != RankUpQuestPhase::NeedList {
             self.rank_up_quest = Some(runtime);
-            return;
+            return Ok(());
         }
 
         if runtime.config.mode == RankUpQuestMode::All && runtime.seeking_top {
             let at_top = self
                 .sidecar()
                 .find_element_by_name(None, "RankUpQuest", "scroll_start")
+                .recoverable()?
                 .map(|result| result.found)
                 .unwrap_or(false);
             if at_top || runtime.top_swipes >= MAX_TOP_SWIPES {
@@ -214,34 +215,35 @@ impl Runner {
                 );
                 self.rank_up_quest = Some(runtime);
                 thread::sleep(ACTION_DELAY);
-                return;
+                return Ok(());
             }
         }
 
-        let rows = match self.sidecar().find_rank_up_quest_rows(None) {
+        let rows = match self.sidecar().find_rank_up_quest_rows(None).recoverable()? {
             Ok(result) => result.rows,
             Err(error) => {
-                self.fail_action("RankUpQuest", "识别强化任务列表", error);
+                self.fail_action("RankUpQuest", "识别强化任务列表", error.to_string());
                 self.rank_up_quest = Some(runtime);
-                return;
+                return Ok(());
             }
         };
 
         match runtime.config.mode {
-            RankUpQuestMode::Single => self.handle_single_rank_up_row(&mut runtime, &rows),
-            RankUpQuestMode::All => self.handle_all_rank_up_rows(&mut runtime, &rows),
+            RankUpQuestMode::Single => self.handle_single_rank_up_row(&mut runtime, &rows)?,
+            RankUpQuestMode::All => self.handle_all_rank_up_rows(&mut runtime, &rows)?,
         }
         self.rank_up_quest = Some(runtime);
+        Ok(())
     }
 
     fn handle_single_rank_up_row(
         &mut self,
         runtime: &mut RankUpQuestRuntime,
         rows: &[crate::screen::RankUpQuestRow],
-    ) {
+    ) -> AutomationResult<()> {
         let Some(target) = runtime.config.target.clone() else {
             self.fail_action("RankUpQuest", "定位所选强化任务", "缺少目标截图".into());
-            return;
+            return Ok(());
         };
         let signature_template_size = rank_up_signature_template_size(self.frame_w, self.frame_h);
         let mut best: Option<(&crate::screen::RankUpQuestRow, f64)> = None;
@@ -259,14 +261,17 @@ impl Runner {
                 .zip(&target.signature_regions)
                 .zip(TARGET_SIGNATURE_WEIGHTS)
             {
-                let result = self.sidecar().find_region_with_template_crop_full(
-                    None,
-                    &target.reference_path,
-                    *region,
-                    *template_crop,
-                    Some(signature_template_size),
-                    0.0,
-                );
+                let result = self
+                    .sidecar()
+                    .find_region_with_template_crop_full(
+                        None,
+                        &target.reference_path,
+                        *region,
+                        *template_crop,
+                        Some(signature_template_size),
+                        0.0,
+                    )
+                    .recoverable()?;
                 let Ok(result) = result else {
                     matched = false;
                     break;
@@ -295,7 +300,7 @@ impl Runner {
             } else {
                 self.emit_debug("RankUpQuest", "等待稳定识别所选强化任务");
             }
-            return;
+            return Ok(());
         };
 
         if !row.actionable {
@@ -311,36 +316,38 @@ impl Runner {
             } else {
                 self.emit_debug("RankUpQuest", "等待稳定确认所选强化任务已变暗");
             }
-            return;
+            return Ok(());
         }
         runtime.missing_count = 0;
         self.emit_debug("RankUpQuest", &format!("所选强化任务视觉匹配 {:.3}", score));
         if !runtime.observe_row(RankUpQuestRuntime::row_key(row)) {
             self.emit("RankUpQuest", "确认所选强化任务可点击…");
-            return;
+            return Ok(());
         }
         self.tap_rank_up_quest_row(runtime, row);
+        Ok(())
     }
 
     fn handle_all_rank_up_rows(
         &mut self,
         runtime: &mut RankUpQuestRuntime,
         rows: &[crate::screen::RankUpQuestRow],
-    ) {
+    ) -> AutomationResult<()> {
         if let Some(row) = rows.iter().find(|row| row.actionable) {
             if !runtime.observe_row(RankUpQuestRuntime::row_key(row)) {
                 self.emit("RankUpQuest", "确认下一项强化任务可点击…");
-                return;
+                return Ok(());
             }
             runtime.clicked_in_pass = true;
             self.tap_rank_up_quest_row(runtime, row);
-            return;
+            return Ok(());
         }
 
         runtime.reset_stability();
         let at_bottom = self
             .sidecar()
             .find_element_by_name(None, "RankUpQuest", "scroll_end")
+            .recoverable()?
             .map(|result| result.found)
             .unwrap_or(false)
             || runtime.forward_swipes >= MAX_FORWARD_SWIPES;
@@ -354,7 +361,7 @@ impl Runner {
                 self.emit("RankUpQuest", "所有可强化任务均已完成");
                 self.transition_lifecycle(RunnerLifecycleEvent::Finished);
             }
-            return;
+            return Ok(());
         }
 
         runtime.forward_swipes += 1;
@@ -367,6 +374,7 @@ impl Runner {
             250,
         );
         thread::sleep(ACTION_DELAY);
+        Ok(())
     }
 
     fn tap_rank_up_quest_row(

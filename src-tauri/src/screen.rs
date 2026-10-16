@@ -4,11 +4,14 @@
 //! live in `operations`. Callers continue to use the stable exports here.
 
 mod client;
+mod error;
 mod operations;
 mod protocol;
+mod recognition_diagnostics;
 mod types;
 
 pub use client::{SidecarClient, TemplateLoadSpec};
+pub use error::CvError;
 pub use types::*;
 
 pub const SIDECAR_STARTUP_REDOWNLOAD_MESSAGE: &str =

@@ -1,5 +1,6 @@
 mod adb;
 mod automation_coordinator;
+mod automation_error;
 mod battle_statistics;
 mod commands;
 mod craft_essence_enhancement_runner;
@@ -9,6 +10,7 @@ mod models;
 mod operation_log;
 mod paths;
 mod platform;
+mod recognition_diagnostics;
 mod runner;
 mod screen;
 mod server;
@@ -72,6 +74,7 @@ pub fn run() {
             refresh_asset_protocol_scope(app.handle())?;
             app.manage(Mutex::new(adb_device_settings));
             app.manage(Mutex::new(server));
+            app.manage(platform::MuMuLookupState::default());
             app.manage(Mutex::new(recognition_settings));
             app.manage(Mutex::new(debug_settings));
             app.manage(Mutex::new(app_ui_settings));
@@ -80,6 +83,8 @@ pub fn run() {
             app.manage(Mutex::new(CraftEssenceEnhancementRunnerHandle::new_idle()));
             app.manage(Mutex::new(FriendPointSummonRunnerHandle::new_idle()));
             app.manage(AutomationCoordinator::default());
+            app.manage(recognition_diagnostics::DiagnosticLogs::default());
+            app.manage(recognition_diagnostics::DiagnosticStore::default());
             app.manage(commands::projects::CommandEditorLock::default());
             app.manage(Arc::new(ResourceDownloadCancelState::default()));
             app.manage(commands::debug::DebugSidecar::new());
@@ -184,7 +189,6 @@ pub fn run() {
             commands::settings::set_unknown_screen_timeout_count,
             commands::settings::set_auto_capture_battle_before_attack,
             commands::settings::set_auto_capture_battle_result_loot,
-            commands::settings::set_auto_capture_unknown_screen_timeout,
             commands::settings::set_auto_capture_skill_use_probe,
             commands::settings::set_auto_capture_unrecognized_critical_chance,
             commands::settings::set_simulate_stuck_attack_selection,
@@ -206,6 +210,10 @@ pub fn run() {
             commands::automation::start_friend_point_summon_automation,
             commands::automation::stop_friend_point_summon_automation,
             commands::automation::get_friend_point_summon_automation_status,
+            recognition_diagnostics::list_recognition_diagnostics,
+            recognition_diagnostics::export_recognition_diagnostic,
+            recognition_diagnostics::delete_recognition_diagnostic,
+            recognition_diagnostics::clear_recognition_diagnostics,
             commands::debug::debug_capture,
             commands::debug::debug_stream_connect,
             commands::debug::debug_stream_disconnect,

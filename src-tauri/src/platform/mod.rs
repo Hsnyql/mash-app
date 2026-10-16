@@ -5,6 +5,7 @@ mod artifacts;
 mod filesystem;
 #[cfg(desktop)]
 mod menu;
+mod mumu;
 mod process;
 mod window_chrome;
 
@@ -18,6 +19,7 @@ pub(crate) use artifacts::{adb_executable_name, runtime_exe_name, runtime_platfo
 pub(crate) use filesystem::{copy_symlink, extract_zip_symlink, make_runtime_executable};
 #[cfg(desktop)]
 pub(crate) use menu::configure_app_menu;
+pub(crate) use mumu::{resolve_mumu_display, MuMuLookupState};
 pub(crate) use process::{external_command, output_with_timeout};
 
 #[cfg(not(desktop))]

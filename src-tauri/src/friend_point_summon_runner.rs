@@ -1,4 +1,5 @@
 use crate::adb::Adb;
+use crate::automation_error::{AutomationResult, AutomationResultExt};
 use crate::runner::LogLevel;
 use crate::screen::{ElementMatch, NormRect, Point, SidecarClient};
 use crate::touch::{self, TouchBackend};
@@ -64,7 +65,7 @@ impl HomeReference {
         Ok(())
     }
 
-    fn matches(&self, sidecar: &mut SidecarClient, frame: &Path) -> Result<bool, String> {
+    fn matches(&self, sidecar: &mut SidecarClient, frame: &Path) -> AutomationResult<bool> {
         for crop in HOME_REGIONS {
             let region = NormRect {
                 x: crop.x - 0.005,
@@ -90,20 +91,19 @@ impl HomeReference {
     }
 }
 
-fn capture_frame(sidecar: &mut SidecarClient) -> Result<HomeReference, String> {
+fn capture_frame(sidecar: &mut SidecarClient) -> AutomationResult<HomeReference> {
     let (encoded, width, height) = sidecar.get_frame_jpeg_base64(2.0)?;
     if width == 0 || height == 0 {
         return Err("视频帧尺寸无效".into());
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded)
-        .map_err(|error| format!("视频帧解码失败: {error}"))?;
+        .context("视频帧解码失败")?;
     let mut frame = tempfile::Builder::new()
         .prefix("mash-friend-home-")
         .suffix(".jpg")
-        .tempfile()
-        .map_err(|error| error.to_string())?;
-    frame.write_all(&bytes).map_err(|error| error.to_string())?;
+        .tempfile()?;
+    frame.write_all(&bytes)?;
     Ok(HomeReference {
         frame,
         size: (width, height),
@@ -307,6 +307,12 @@ impl FriendPointSummonRunner {
     }
 
     pub fn run(mut self) {
+        if let Err(message) = self.run_loop() {
+            self.fail("CV", message.to_string());
+        }
+    }
+
+    fn run_loop(&mut self) -> AutomationResult<()> {
         self.transition(LifecycleEvent::WorkerStarted);
         self.emit("", "友情点抽取自动化已启动");
 
@@ -319,16 +325,16 @@ impl FriendPointSummonRunner {
             if self.cancel.load(Ordering::Relaxed) {
                 self.transition(LifecycleEvent::StopRequested);
                 self.emit("", "友情点抽取自动化已停止");
-                return;
+                return Ok(());
             }
 
             workflow = match workflow {
                 WorkflowState::VerifyStart {
                     checks,
                     stable_matches,
-                } => match self.handle_verify_start(checks, stable_matches) {
+                } => match self.handle_verify_start(checks, stable_matches)? {
                     Some(next) => next,
-                    None => return,
+                    None => return Ok(()),
                 },
                 WorkflowState::AwaitConfirmation {
                     origin,
@@ -344,9 +350,9 @@ impl FriendPointSummonRunner {
                     action_taps,
                     shell_matches,
                     last_tap,
-                ) {
+                )? {
                     Some(next) => next,
-                    None => return,
+                    None => return Ok(()),
                 },
                 WorkflowState::AwaitResult {
                     started_at,
@@ -364,9 +370,9 @@ impl FriendPointSummonRunner {
                     result_matches,
                     shell_matches,
                     batch_counted,
-                ) {
+                )? {
                     Some(next) => next,
-                    None => return,
+                    None => return Ok(()),
                 },
             };
 
@@ -374,12 +380,16 @@ impl FriendPointSummonRunner {
         }
     }
 
-    fn handle_verify_start(&mut self, checks: u8, stable_matches: u8) -> Option<WorkflowState> {
-        let observation = match self.observe_start(true) {
+    fn handle_verify_start(
+        &mut self,
+        checks: u8,
+        stable_matches: u8,
+    ) -> AutomationResult<Option<WorkflowState>> {
+        let observation = match self.observe_start(true).recoverable()? {
             Ok(observation) => observation,
             Err(error) => {
                 self.fail("", format!("友情点页面识别失败: {error}"));
-                return None;
+                return Ok(None);
             }
         };
         let next_checks = checks.saturating_add(1);
@@ -395,17 +405,17 @@ impl FriendPointSummonRunner {
                 "已记录本次目标主页，接下来通过确认框验证友情点召唤",
             );
             if !self.tap_at("FriendPointSummonMain", SUMMON_100_BUTTON) {
-                return None;
+                return Ok(None);
             }
             self.emit("FriendPointSummonMain", "点击“召唤 × 100”");
-            return Some(WorkflowState::AwaitConfirmation {
+            return Ok(Some(WorkflowState::AwaitConfirmation {
                 origin: ConfirmationOrigin::Initial,
                 checks: 0,
                 stable_matches: 0,
                 action_taps: 1,
                 shell_matches: 0,
                 last_tap: Instant::now(),
-            });
+            }));
         }
 
         if next_checks >= START_MAX_CHECKS {
@@ -413,17 +423,17 @@ impl FriendPointSummonRunner {
                 current_screen_name(observation),
                 "启动失败：无法稳定记录目标主页，请停留在国服友情点抽取主页后重试".into(),
             );
-            return None;
+            return Ok(None);
         }
 
         self.emit(
             current_screen_name(observation),
             &format!("正在记录目标主页特征… ({next_checks}/{START_MAX_CHECKS})"),
         );
-        Some(WorkflowState::VerifyStart {
+        Ok(Some(WorkflowState::VerifyStart {
             checks: next_checks,
             stable_matches: next_stable,
-        })
+        }))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -435,16 +445,16 @@ impl FriendPointSummonRunner {
         action_taps: u8,
         shell_matches: u8,
         last_tap: Instant,
-    ) -> Option<WorkflowState> {
+    ) -> AutomationResult<Option<WorkflowState>> {
         let observed = match origin {
-            ConfirmationOrigin::Initial => self.observe_start(false),
-            ConfirmationOrigin::Repeat => self.observe(),
+            ConfirmationOrigin::Initial => self.observe_start(false).recoverable()?,
+            ConfirmationOrigin::Repeat => self.observe().recoverable()?,
         };
         let observation = match observed {
             Ok(observation) => observation,
             Err(error) => {
                 self.fail("", format!("友情点确认框识别失败: {error}"));
-                return None;
+                return Ok(None);
             }
         };
         let next_checks = checks.saturating_add(1);
@@ -465,11 +475,11 @@ impl FriendPointSummonRunner {
                 "已确认弹窗为友情点100次召唤",
             );
             if !self.tap_at("FriendPointSummonConfirmation", CONFIRM_BUTTON) {
-                return None;
+                return Ok(None);
             }
             self.emit("FriendPointSummonConfirmation", "点击“决定”");
             let now = Instant::now();
-            return Some(WorkflowState::AwaitResult {
+            return Ok(Some(WorkflowState::AwaitResult {
                 started_at: now,
                 last_skip_tap: now.checked_sub(SKIP_TAP_INTERVAL).unwrap_or(now),
                 last_decision_tap: now,
@@ -477,7 +487,7 @@ impl FriendPointSummonRunner {
                 result_matches: 0,
                 shell_matches: 0,
                 batch_counted: false,
-            });
+            }));
         }
 
         let expected_visible = match origin {
@@ -490,26 +500,26 @@ impl FriendPointSummonRunner {
         {
             let point = match origin {
                 ConfirmationOrigin::Initial => SUMMON_100_BUTTON,
-                ConfirmationOrigin::Repeat => match self.continue_button_point() {
+                ConfirmationOrigin::Repeat => match self.continue_button_point().recoverable()? {
                     Ok(Some(point)) => point,
                     Ok(None) => {
-                        return Some(WorkflowState::AwaitConfirmation {
+                        return Ok(Some(WorkflowState::AwaitConfirmation {
                             origin,
                             checks: next_checks,
                             stable_matches: next_stable,
                             action_taps,
                             shell_matches: next_shell_matches,
                             last_tap,
-                        });
+                        }));
                     }
                     Err(error) => {
                         self.fail("", format!("继续召唤按钮识别失败: {error}"));
-                        return None;
+                        return Ok(None);
                     }
                 },
             };
             if !self.tap_at(current_screen_name(observation), point) {
-                return None;
+                return Ok(None);
             }
             self.emit(
                 current_screen_name(observation),
@@ -518,36 +528,36 @@ impl FriendPointSummonRunner {
                     action_taps + 1
                 ),
             );
-            return Some(WorkflowState::AwaitConfirmation {
+            return Ok(Some(WorkflowState::AwaitConfirmation {
                 origin,
                 checks: next_checks,
                 stable_matches: next_stable,
                 action_taps: action_taps + 1,
                 shell_matches: next_shell_matches,
                 last_tap: Instant::now(),
-            });
+            }));
         }
 
         if next_checks >= CONFIRMATION_MAX_CHECKS {
             if origin == ConfirmationOrigin::Repeat {
                 self.finish("无法再次打开100次友情点召唤确认框，已安全停止");
-                return None;
+                return Ok(None);
             }
             self.fail(
                 current_screen_name(observation),
                 "等待友情点100次召唤确认框超时".into(),
             );
-            return None;
+            return Ok(None);
         }
 
-        Some(WorkflowState::AwaitConfirmation {
+        Ok(Some(WorkflowState::AwaitConfirmation {
             origin,
             checks: next_checks,
             stable_matches: next_stable,
             action_taps,
             shell_matches: next_shell_matches,
             last_tap,
-        })
+        }))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -560,20 +570,20 @@ impl FriendPointSummonRunner {
         result_matches: u8,
         shell_matches: u8,
         batch_counted: bool,
-    ) -> Option<WorkflowState> {
+    ) -> AutomationResult<Option<WorkflowState>> {
         if started_at.elapsed() >= ANIMATION_TIMEOUT {
             self.fail(
                 "FriendPointSummonAnimation",
                 "等待友情点召唤结果页超时（1000秒）".into(),
             );
-            return None;
+            return Ok(None);
         }
 
-        let observation = match self.observe() {
+        let observation = match self.observe().recoverable()? {
             Ok(observation) => observation,
             Err(error) => {
                 self.fail("", format!("召唤结果页识别失败: {error}"));
-                return None;
+                return Ok(None);
             }
         };
         let next_result_matches = if observation == ObservedScreen::ResultContinue100 {
@@ -591,7 +601,7 @@ impl FriendPointSummonRunner {
             if decision_taps < MAX_ACTION_TAPS && last_decision_tap.elapsed() >= TAP_RETRY_INTERVAL
             {
                 if !self.tap_at("FriendPointSummonConfirmation", CONFIRM_BUTTON) {
-                    return None;
+                    return Ok(None);
                 }
                 self.emit(
                     "FriendPointSummonConfirmation",
@@ -600,7 +610,7 @@ impl FriendPointSummonRunner {
                         decision_taps + 1
                     ),
                 );
-                return Some(WorkflowState::AwaitResult {
+                return Ok(Some(WorkflowState::AwaitResult {
                     started_at,
                     last_skip_tap,
                     last_decision_tap: Instant::now(),
@@ -608,14 +618,14 @@ impl FriendPointSummonRunner {
                     result_matches: 0,
                     shell_matches: 0,
                     batch_counted,
-                });
+                }));
             }
             if decision_taps >= MAX_ACTION_TAPS {
                 self.fail(
                     "FriendPointSummonConfirmation",
                     "多次点击“决定”后确认框仍未关闭".into(),
                 );
-                return None;
+                return Ok(None);
             }
         }
 
@@ -626,10 +636,10 @@ impl FriendPointSummonRunner {
                 self.complete_batch();
                 true
             };
-            let point = match self.continue_button_point() {
+            let point = match self.continue_button_point().recoverable()? {
                 Ok(Some(point)) => point,
                 Ok(None) => {
-                    return Some(WorkflowState::AwaitResult {
+                    return Ok(Some(WorkflowState::AwaitResult {
                         started_at,
                         last_skip_tap,
                         last_decision_tap,
@@ -637,25 +647,25 @@ impl FriendPointSummonRunner {
                         result_matches: next_result_matches,
                         shell_matches: next_shell_matches,
                         batch_counted,
-                    });
+                    }));
                 }
                 Err(error) => {
                     self.fail("", format!("继续召唤按钮识别失败: {error}"));
-                    return None;
+                    return Ok(None);
                 }
             };
             if !self.tap_at("FriendPointSummonResult", point) {
-                return None;
+                return Ok(None);
             }
             self.emit("FriendPointSummonResult", "点击“继续进行100次召唤”");
-            return Some(WorkflowState::AwaitConfirmation {
+            return Ok(Some(WorkflowState::AwaitConfirmation {
                 origin: ConfirmationOrigin::Repeat,
                 checks: 0,
                 stable_matches: 0,
                 action_taps: 1,
                 shell_matches: 0,
                 last_tap: Instant::now(),
-            });
+            }));
         }
 
         if next_shell_matches >= RESULT_SETTLE_CHECKS {
@@ -663,17 +673,17 @@ impl FriendPointSummonRunner {
                 self.complete_batch();
             }
             self.finish("结果页已不再提供“继续进行100次召唤”，抽取完成");
-            return None;
+            return Ok(None);
         }
 
         if observation != ObservedScreen::SummonShell
             && last_skip_tap.elapsed() >= SKIP_TAP_INTERVAL
         {
             if !self.tap_at("FriendPointSummonAnimation", SKIP_ANIMATION_BUTTON) {
-                return None;
+                return Ok(None);
             }
             self.emit("FriendPointSummonAnimation", "点击顶部跳过召唤动画…");
-            return Some(WorkflowState::AwaitResult {
+            return Ok(Some(WorkflowState::AwaitResult {
                 started_at,
                 last_skip_tap: Instant::now(),
                 last_decision_tap,
@@ -681,10 +691,10 @@ impl FriendPointSummonRunner {
                 result_matches: next_result_matches,
                 shell_matches: next_shell_matches,
                 batch_counted,
-            });
+            }));
         }
 
-        Some(WorkflowState::AwaitResult {
+        Ok(Some(WorkflowState::AwaitResult {
             started_at,
             last_skip_tap,
             last_decision_tap,
@@ -692,10 +702,10 @@ impl FriendPointSummonRunner {
             result_matches: next_result_matches,
             shell_matches: next_shell_matches,
             batch_counted,
-        })
+        }))
     }
 
-    fn observe(&mut self) -> Result<ObservedScreen, String> {
+    fn observe(&mut self) -> AutomationResult<ObservedScreen> {
         let confirmation = self.probe(CONFIRMATION_ELEMENT)?.found;
         let result_continue_100 = self.probe(CONTINUE_100_ELEMENT)?.found;
         let main = self.probe(MAIN_ELEMENT)?.found;
@@ -708,7 +718,7 @@ impl FriendPointSummonRunner {
         }))
     }
 
-    fn observe_start(&mut self, allow_capture: bool) -> Result<ObservedScreen, String> {
+    fn observe_start(&mut self, allow_capture: bool) -> AutomationResult<ObservedScreen> {
         // Every probe sees the same frame, including the resolution check.
         let current = capture_frame(self.sidecar())?;
         if let Some(reference) = self.home_reference.lock().unwrap().as_ref() {
@@ -735,17 +745,18 @@ impl FriendPointSummonRunner {
         Ok(classify_snapshot(snapshot))
     }
 
-    fn probe(&mut self, element: &str) -> Result<ElementMatch, String> {
-        self.probe_at(None, element)
+    fn probe(&mut self, element: &str) -> AutomationResult<ElementMatch> {
+        Ok(self.probe_at(None, element)?)
     }
 
-    fn probe_at(&mut self, frame: Option<&Path>, element: &str) -> Result<ElementMatch, String> {
-        self.sidecar()
+    fn probe_at(&mut self, frame: Option<&Path>, element: &str) -> AutomationResult<ElementMatch> {
+        Ok(self
+            .sidecar()
             .find_element_by_name(frame, SCREEN_NAME, element)
-            .map_err(|error| format!("{SCREEN_NAME}.{element}: {error}"))
+            .context(format!("{SCREEN_NAME}.{element}"))?)
     }
 
-    fn continue_button_point(&mut self) -> Result<Option<Point>, String> {
+    fn continue_button_point(&mut self) -> AutomationResult<Option<Point>> {
         let result = self.probe(CONTINUE_100_ELEMENT)?;
         Ok(result.found.then_some(Point::new(result.x, result.y)))
     }
@@ -825,17 +836,8 @@ impl FriendPointSummonRunner {
 
 impl Drop for FriendPointSummonRunner {
     fn drop(&mut self) {
-        let Some(mut sidecar) = self.sidecar.take() else {
-            return;
-        };
-        if let Err(error) = sidecar.prepare_for_cache() {
-            eprintln!("[mash-cv] prepare friend point summon sidecar for cache failed: {error}");
-        }
-        if let Some(cache) = &self.sidecar_cache {
-            let mut guard = cache.lock().unwrap();
-            if guard.is_none() {
-                *guard = Some(sidecar);
-            }
+        if let Some(sidecar) = self.sidecar.take() {
+            sidecar.return_to_cache(self.sidecar_cache.as_deref());
         }
     }
 }

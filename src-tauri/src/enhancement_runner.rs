@@ -1,4 +1,5 @@
 use crate::adb::Adb;
+use crate::automation_error::{AutomationResult, AutomationResultExt};
 use crate::runner::LogLevel;
 use crate::screen::{ElementMatch, NormRect, OcrFragment, OcrRegionResult, Point, SidecarClient};
 use crate::touch::{self, TouchBackend};

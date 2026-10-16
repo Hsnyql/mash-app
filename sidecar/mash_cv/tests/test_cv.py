@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 import mash_cv
+from mash_cv.cv import TemplateLoadError
 
 
 @pytest.fixture(autouse=True)
@@ -27,6 +28,7 @@ def _clear_state():
     _cv_module._servant_catalog_cache = None
     _cv_module.static_template_keys.clear()
     _cv_module.template_dirs.clear()
+    _cv_module._template_source_paths.clear()
     _cv_module.templates_dir = None
     yield
     mash_cv.templates.clear()
@@ -37,6 +39,7 @@ def _clear_state():
     _cv_module._servant_catalog_cache = None
     _cv_module.static_template_keys.clear()
     _cv_module.template_dirs.clear()
+    _cv_module._template_source_paths.clear()
     _cv_module.templates_dir = None
     _cv_module._release_ocr()
     _cv_module._current_server = "JP"
@@ -104,6 +107,27 @@ def test_detect_rank_up_quest_page_at_supported_sizes(size):
         }
     )
     image = _rank_up_quest_fixture("bright-cn.png")
+    if (image.shape[1], image.shape[0]) != size:
+        image = cv2.resize(image, size, interpolation=cv2.INTER_AREA)
+
+    result = mash_cv._detect_screen(image)
+
+    assert result["screen"] == "RankUpQuest"
+    assert result["score"] >= 0.8
+
+
+@pytest.mark.parametrize("filename", (
+    "bright-cn.png", "dark-cn.png", "shifted-after-run-cn.png",
+))
+@pytest.mark.parametrize("size", ((2560, 1440), (1920, 1080)))
+def test_cn_unscoped_detection_recognizes_rank_up_quest_with_bundled_config(filename, size):
+    """The capture command classifies against all merged production screens."""
+    resources = Path(__file__).resolve().parents[3] / "src-tauri/resources/servers"
+    mash_cv._load_templates(str(resources / "shared/templates"), key_prefix="shared")
+    mash_cv._load_templates(str(resources / "cn/templates"), append=True)
+    mash_cv._load_config(str(resources / "shared/cv.json"))
+    mash_cv._load_config(str(resources / "cn/cv.json"), merge=True)
+    image = _rank_up_quest_fixture(filename)
     if (image.shape[1], image.shape[0]) != size:
         image = cv2.resize(image, size, interpolation=cv2.INTER_AREA)
 
@@ -298,11 +322,37 @@ def test_five_star_ce_drop_template_hits_expected_loot_cells():
 
 
 class TestDetectScreen:
+    @pytest.mark.parametrize("detect", [
+        {"template": "missing"},
+        {"templates": ["missing"]},
+        {"templateOptions": [{"template": "missing"}]},
+        {"requiredTemplates": [{"template": "missing"}]},
+    ])
+    def test_runtime_detection_reports_missing_template(self, detect):
+        mash_cv._set_config({"screens": {"Battle": {"detect": detect}}})
+        with pytest.raises(TemplateLoadError) as caught:
+            mash_cv._detect_screen(_make_bgr_image(200, 200), ["Battle"])
+        assert caught.value.response["errorCode"] == "template_load_failed"
+        assert caught.value.response["templateKey"] == "missing"
+
+    def test_runtime_detection_ignores_other_workflows(self):
+        patch = _gradient_patch(20)
+        mash_cv.templates["battle"] = patch
+        image = _make_bgr_image(200, 200)
+        image[10:30, 10:30] = cv2.merge([patch, patch, patch])
+        mash_cv._set_config({"screens": {
+            "Main": {"detect": {"template": "missing"}},
+            "Battle": {"detect": {"template": "battle"}},
+        }})
+        result = mash_cv._detect_screen(image, ["Battle"])
+        assert result["screen"] == "Battle"
+        assert "error" not in result
+
     def test_unknown_when_config_empty(self):
         img = _make_bgr_image(200, 200)
         assert mash_cv._detect_screen(img) == {"screen": "Unknown", "score": 0.0}
 
-    def test_unknown_when_template_not_loaded(self):
+    def test_missing_template_raises_loading_error(self):
         mash_cv._set_config({
             "screens": {
                 "Foo": {
@@ -315,7 +365,8 @@ class TestDetectScreen:
             }
         })
         img = _make_bgr_image(200, 200)
-        assert mash_cv._detect_screen(img) == {"screen": "Unknown", "score": 0.0}
+        with pytest.raises(TemplateLoadError, match="missing_template"):
+            mash_cv._detect_screen(img)
 
     def test_picks_matching_screen(self):
         patch = _gradient_patch(20)
@@ -429,7 +480,7 @@ class TestDetectScreen:
             img,
             cv2.resize(img, (2560, 1440), interpolation=cv2.INTER_CUBIC),
         ):
-            result = mash_cv._detect_screen(frame)
+            result = mash_cv._detect_screen(frame, ["Battle", "Attack", "BattleResultBond", "BattleResultBondLevelUp", "BattleResultExp", "BattleResultExpLevelUp", "BattleResultMasterLevelUp", "BattleResultLoot", "BattleResultLootEvent"])
             assert result["screen"] == "Attack"
             assert result["score"] >= 0.30
 
@@ -1050,7 +1101,7 @@ class TestDetectScreen:
         img = cv2.imread(screenshot)
         assert img is not None
 
-        result = mash_cv._detect_screen(img)
+        result = mash_cv._detect_screen(img, ["Battle", "Attack", "BattleResultBond", "BattleResultBondLevelUp", "BattleResultExp", "BattleResultExpLevelUp", "BattleResultMasterLevelUp", "BattleResultLoot", "BattleResultLootEvent"])
         assert result["screen"] == "BattleResultBondLevelUp"
         assert result["score"] >= 0.85
 
@@ -1118,7 +1169,7 @@ class TestDetectScreen:
         img = cv2.imread(screenshot)
         assert img is not None
 
-        result = mash_cv._detect_screen(img)
+        result = mash_cv._detect_screen(img, ["Battle", "Attack", "BattleResultBond", "BattleResultBondLevelUp", "BattleResultExp", "BattleResultExpLevelUp", "BattleResultMasterLevelUp", "BattleResultLoot", "BattleResultLootEvent"])
         assert result["screen"] == "BattleResultExpLevelUp"
         assert result["score"] >= 0.85
 
@@ -1197,7 +1248,7 @@ class TestDetectScreen:
             img,
             cv2.resize(img, (1920, 1080), interpolation=cv2.INTER_AREA),
         ):
-            result = mash_cv._detect_screen(frame)
+            result = mash_cv._detect_screen(frame, ["Battle", "Attack", "BattleResultBond", "BattleResultBondLevelUp", "BattleResultExp", "BattleResultExpLevelUp", "BattleResultMasterLevelUp", "BattleResultLoot", "BattleResultLootEvent"])
             assert result["screen"] == "BattleResultLootEvent"
             assert result["score"] >= 0.85
 
@@ -1257,10 +1308,26 @@ class TestDetectScreen:
 
 
 class TestLoadTemplates:
+    @pytest.mark.parametrize("append", [False, True])
+    def test_unreadable_png_returns_template_key_and_path(self, tmp_path, append):
+        nested = tmp_path / "battle"
+        nested.mkdir()
+        broken = nested / "attack.png"
+        broken.write_bytes(b"not a PNG")
+
+        with pytest.raises(TemplateLoadError) as caught:
+            mash_cv._load_templates(str(tmp_path), append=append, key_prefix="shared")
+        result = caught.value.response
+        assert result["errorCode"] == "template_load_failed"
+        assert result["templateKey"] == "shared/battle/attack"
+        assert result["templatePath"] == str(broken)
+        assert "shared/battle/attack" in result["error"]
+        assert str(broken) in result["error"]
+
     def test_missing_directory(self):
-        result = mash_cv._load_templates("/nonexistent/path")
-        assert result["ok"] is False
-        assert "not found" in result["error"]
+        with pytest.raises(TemplateLoadError) as caught:
+            mash_cv._load_templates("/nonexistent/path")
+        assert caught.value.response["templatePath"] == "/nonexistent/path"
 
 
 class TestOcrRegion:
@@ -1359,11 +1426,10 @@ class TestLoadConfig:
 class TestFindElement:
     def test_missing_template_key(self):
         img = _make_bgr_image(100, 100)
-        result = mash_cv._find_element(
-            img, "nonexistent", {"x": 0, "y": 0, "w": 1, "h": 1}, 0.8
-        )
-        assert result["found"] is False
-        assert "template not loaded" in result["error"]
+        with pytest.raises(TemplateLoadError, match="nonexistent"):
+            mash_cv._find_element(
+                img, "nonexistent", {"x": 0, "y": 0, "w": 1, "h": 1}, 0.8
+            )
 
     def test_finds_embedded_patch(self):
         img = _make_bgr_image(200, 200, bgr=(200, 200, 200))
@@ -1726,16 +1792,12 @@ def test_order_change_selection_probe_matches_current_jp_capture(width):
 class TestProbeSkillUseDialog:
     def test_missing_template_key_returns_error(self):
         img = _make_bgr_image(100, 100)
-        result = mash_cv._probe_skill_use_dialog(
-            img,
-            "missing",
-            {"x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0},
-            0.8,
-            {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5},
-        )
-
-        assert result["found"] is False
-        assert "template not loaded" in result["error"]
+        with pytest.raises(TemplateLoadError, match="missing"):
+            mash_cv._probe_skill_use_dialog(
+                img, "missing",
+                {"x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0}, 0.8,
+                {"x": 0.0, "y": 0.0, "w": 0.5, "h": 0.5},
+            )
 
     def test_cn_skill_use_screenshots_return_confirm_luma_on_same_probe(self):
         repo_root = Path(__file__).resolve().parents[3]
@@ -2052,8 +2114,16 @@ class TestReadBattleScene:
         assert result["ok"] is True
         for key in ("text_battle_label", "digit_1", "digit_3"):
             assert key in mash_cv.templates, f"missing template {key}"
+        from mash_cv import cv as cv_module
+        for digit in range(10):
+            key = f"digit_{digit}"
+            if key not in mash_cv.templates:
+                path = os.path.join(_PROD_TEMPLATES_DIR, "digit", f"digit_{digit}.png")
+                mash_cv.templates[key], _ = cv_module._read_template_png(path)
+                cv_module.static_template_keys.add(key)
 
     def test_returns_none_when_anchor_missing(self):
+        self._load_real_templates()
         img = _make_bgr_image(2560, 1440)
         result = mash_cv._read_battle_scene(img, BATTLE_SCENE_REGION)
         assert result == {"scene": None, "total": None}
@@ -2169,15 +2239,13 @@ class TestReadBattleScene:
         assert diag["trimmedLeft"] == 1
         assert diag["failReason"] is None
 
-    def test_np_overlay_returns_none(self):
-        # battle_np.png has the noble-phantasm splash covering the HUD,
-        # so the BATTLE anchor falls below threshold and the function bails
-        # with both fields None.
+    def test_np_selection_preserves_visible_battle_counter(self):
+        # The NP selection screen still shows BATTLE 1/2 in the HUD.
         self._load_real_templates()
         img = cv2.imread(os.path.join(_TEST_SCREENSHOTS_DIR, "battle_np.png"))
         assert img is not None
         result = mash_cv._read_battle_scene(img, BATTLE_SCENE_REGION)
-        assert result == {"scene": None, "total": None}
+        assert result == {"scene": 1, "total": 2}
 
     def test_cohesion_trim_drops_stray_digit_on_outer_edge(self):
         """Synthesize a strip with a real ``BATTLE 1/3`` reading plus a
@@ -2327,12 +2395,10 @@ class TestReadLevelDigits:
         assert result["text"] == "90/90"
         assert [d["value"] for d in result["diagnostics"]["digits"]] == [9, 0, 9, 0]
 
-    def test_returns_not_found_when_templates_are_missing(self):
+    def test_missing_digit_templates_raise_loading_error(self):
         img = _make_bgr_image(400, 200, bgr=(255, 255, 255))
-        result = mash_cv._read_level_digits(img, LEVEL_DIGIT_REGION, debug=True)
-        assert result["found"] is False
-        assert result["failReason"] == "missing_digit_templates"
-        assert result["diagnostics"]["failReason"] == "missing_digit_templates"
+        with pytest.raises(TemplateLoadError, match="digit"):
+            mash_cv._read_level_digits(img, LEVEL_DIGIT_REGION, debug=True)
 
 
 # ── _find_enhancement_servant_grid ──────────────────────────────────────
@@ -2395,6 +2461,7 @@ def test_command_card_stun_templates_mark_only_the_matching_slot(template_key, s
     assert mash_cv._load_templates(shared_templates, key_prefix="shared")["ok"] is True
     assert template_key in mash_cv.templates
 
+    mash_cv._load_templates(_PROD_TEMPLATES_DIR, append=True)
     width, height = size
     img = _make_bgr_image(width, height)
     slot_px = mash_cv._slot_to_pixels(
@@ -2438,21 +2505,40 @@ def test_command_card_stun_templates_mark_only_the_matching_slot(template_key, s
     ]
 
 
-def test_command_cards_are_not_stunned_when_shared_templates_are_unavailable():
-    mash_cv.templates.clear()
+def test_command_cards_fail_when_required_color_templates_are_unavailable():
+    mash_cv._load_templates(_PROD_TEMPLATES_DIR)
     img = _make_bgr_image(2560, 1440)
+    with pytest.raises(TemplateLoadError, match="shared/battle/command_icon_"):
+        mash_cv._find_command_cards(img, list(mash_cv.DEFAULT_COMMAND_CARD_SLOTS), [], None)
 
-    result = mash_cv._find_command_cards(
-        img, list(mash_cv.DEFAULT_COMMAND_CARD_SLOTS), [], None
+
+def test_command_cards_fail_when_required_status_templates_are_unavailable():
+    from mash_cv import cv as cv_module
+
+    mash_cv._load_templates(_PROD_TEMPLATES_DIR)
+    mash_cv._load_templates(
+        os.path.join(_REPO_ROOT, "src-tauri", "resources", "servers", "shared", "templates"),
+        append=True, key_prefix="shared",
     )
-
-    assert all(card["isStunned"] is False for card in result["cards"])
+    mash_cv._ensure_icon_color_sigs()
+    for key in cv_module.COMMAND_CARD_STUN_TEMPLATE_KEYS:
+        mash_cv.templates.pop(key, None)
+    cv_module.template_dirs.clear()
+    with pytest.raises(TemplateLoadError, match="shared/battle"):
+        mash_cv._find_command_cards(
+            _make_bgr_image(2560, 1440), list(mash_cv.DEFAULT_COMMAND_CARD_SLOTS), [], None
+        )
 
 
 def test_stunned_command_cards_skip_servant_identification(monkeypatch, tmp_path):
     """Unable-to-act cards do not need an owner and must not trigger retries."""
     from mash_cv import cv as cv_module
 
+    mash_cv._load_templates(_PROD_TEMPLATES_DIR, append=True)
+    mash_cv._load_templates(
+        os.path.join(_REPO_ROOT, "src-tauri", "resources", "servers", "shared", "templates"),
+        append=True, key_prefix="shared",
+    )
     img = _make_bgr_image(1920, 1080)
     identified_slots = []
 
@@ -2615,6 +2701,7 @@ class TestFindCommandCards:
             _REPO_ROOT, "src-tauri", "resources", "servers", "shared", "templates"
         )
         result = mash_cv._load_templates(shared_templates, key_prefix="shared")
+        mash_cv._load_templates(_PROD_TEMPLATES_DIR, append=True)
         assert result["ok"] is True
         for suit in ("a", "b", "q"):
             assert f"shared/battle/command_icon_{suit}" in mash_cv.templates
@@ -2726,6 +2813,7 @@ class TestFindCommandCards:
             assert "servantId" not in c
 
     def test_detects_command_card_support_icon_in_slot(self):
+        self._load()
         from mash_cv import cv as _cv_module
 
         img = _make_bgr_image(1920, 1080)
@@ -2773,6 +2861,7 @@ class TestFindCommandCards:
         assert at_1440p.shape == (48, 67)
 
     def test_reports_support_icon_region_even_when_match_misses(self):
+        self._load()
         img = _make_bgr_image(2560, 1440)
         mash_cv.templates["battle/icon_support"] = _gradient_patch(18)
 
@@ -2944,7 +3033,8 @@ class TestFindCommandCards:
         reason="production CN templates dir not available",
     )
     def test_reads_cn_command_card_mixed_crit_chances(self):
-        result = mash_cv._load_templates(_PROD_CN_TEMPLATES_DIR)
+        self._load()
+        result = mash_cv._load_templates(_PROD_CN_TEMPLATES_DIR, append=True)
         assert result["ok"] is True
         img = cv2.imread(
             os.path.join(_TEST_SCREENSHOTS_DIR, "battle_command_cn_mixed_crit.png")
@@ -2964,7 +3054,8 @@ class TestFindCommandCards:
         reason="production CN templates dir not available",
     )
     def test_reads_cn_command_card_100_crit_chance(self):
-        result = mash_cv._load_templates(_PROD_CN_TEMPLATES_DIR)
+        self._load()
+        result = mash_cv._load_templates(_PROD_CN_TEMPLATES_DIR, append=True)
         assert result["ok"] is True
         img = cv2.imread(
             os.path.join(_TEST_SCREENSHOTS_DIR, "battle_command_cn_100_crit.jpg")
@@ -4244,20 +4335,13 @@ def test_find_supports_confirm_button_anchors_empty_when_no_buttons(monkeypatch)
     assert result["diagnostics"]["confirmButtonAnchors"] == []
 
 
-def test_grand_badge_scores_returns_none_when_all_variants_missing(monkeypatch):
-    """The probe must return ``None`` (rather than a misleading empty
-    list) when the active server bundle hasn't loaded *any* of the
-    "冠位从者" ribbon template variants — that's the runner's signal
-    to fall back to scroll-bar-end instead of treating "no badge
-    anchor" as "section exhausted". Loading at least one variant
-    must keep the probe live."""
-    import mash_cv.cv as cv
-
+def test_grand_badge_scores_fail_when_required_variants_are_missing(monkeypatch):
+    from mash_cv import cv
     monkeypatch.setattr(cv, "templates", {})
     img = np.full((1440, 2560, 3), 96, dtype=np.uint8)
     anchors = [{"x": 0.85, "y": 0.43, "w": 0.07, "h": 0.06}]
-    assert cv._support_grand_badge_scores_per_anchor(img, anchors) is None
-    assert cv._support_grand_section_visible_from_scores(None) is None
+    with pytest.raises(TemplateLoadError, match="grand_servant"):
+        cv._support_grand_badge_scores_per_anchor(img, anchors)
 
 
 @pytest.mark.skipif(
@@ -4859,17 +4943,10 @@ class TestVerifySupportCE:
 
     def test_returns_error_when_template_missing(self):
         from mash_cv.cv import _verify_support_ce
-
         img = _make_bgr_image(2560, 1440, bgr=(80, 80, 80))
-        result = _verify_support_ce(
-            img,
-            {"x": 0.0, "y": 0.0, "w": 0.2, "h": 0.2},
-            "/nonexistent/template.png",
-            0.7,
-        )
-        assert result["passed"] is False
-        assert result["score"] == 0.0
-        assert "not readable" in result["error"]
+        with pytest.raises(TemplateLoadError) as caught:
+            _verify_support_ce(img, {"x": 0.0, "y": 0.0, "w": 0.2, "h": 0.2}, "/nonexistent/template.png", 0.7)
+        assert caught.value.response["templatePath"] == "/nonexistent/template.png"
 
     def test_passes_when_template_embedded_in_region(self, tmp_path):
         from mash_cv.cv import _verify_support_ce
@@ -5778,6 +5855,59 @@ class TestREPL:
         responses = self._run([{"cmd": "quit"}])
         assert responses == []
 
+    def test_template_failure_code_is_shared_by_loading_and_matching_commands(self, tmp_path):
+        image = tmp_path / "frame.png"
+        _save_image(_make_bgr_image(200, 200), str(image))
+        templates = tmp_path / "templates"
+        templates.mkdir()
+        broken = templates / "broken.png"
+        broken.write_bytes(b"not a PNG")
+        responses = self._run([
+            {"cmd": "load_templates", "dir": str(templates), "id": 1},
+            {"cmd": "find_element", "templateKey": "missing", "imagePath": str(image), "id": 2},
+            {"cmd": "find_region", "templatePath": str(broken), "imagePath": str(image), "id": 3},
+            {"cmd": "verify_support_ce", "templatePath": str(broken), "imagePath": str(image), "region": {"x": 0, "y": 0, "w": 1, "h": 1}, "id": 4},
+            {"cmd": "quit"},
+        ])
+        assert len(responses) == 4
+        for req_id, response in enumerate(responses, start=1):
+            assert response["id"] == req_id
+            assert response["errorCode"] == "template_load_failed"
+            assert response["error"].startswith("template load failed: ")
+        assert responses[0]["templateKey"] == "broken"
+        assert responses[0]["templatePath"] == str(broken)
+        assert responses[1]["templateKey"] == "missing"
+        assert responses[2]["templatePath"] == str(broken)
+        assert responses[3]["templatePath"] == str(broken)
+
+    def test_runtime_missing_template_error_preserves_request_id(self, tmp_path):
+        path = tmp_path / "cv.json"
+        path.write_text(json.dumps({"screens": {"Battle": {"detect": {"template": "missing"}}}}))
+        image = tmp_path / "frame.png"
+        _save_image(_make_bgr_image(200, 200), str(image))
+        responses = self._run([
+            {"cmd": "load_config", "path": str(path), "id": 1},
+            {"cmd": "detect", "imagePath": str(image), "screenNames": ["Battle"], "id": 2},
+            {"cmd": "quit"},
+        ])
+        assert responses[1]["id"] == 2
+        assert responses[1]["errorCode"] == "template_load_failed"
+        assert responses[1]["templateKey"] == "missing"
+
+    def test_runtime_probe_does_not_hide_missing_template_as_empty_rows(self, tmp_path):
+        image = tmp_path / "frame.png"
+        _save_image(_make_bgr_image(200, 200), str(image))
+        responses = self._run([
+            {"cmd": "find_rank_up_quest_rows", "imagePath": str(image), "id": 3},
+            {"cmd": "ping", "id": 4},
+            {"cmd": "quit"},
+        ])
+        assert responses[0]["id"] == 3
+        assert responses[0]["errorCode"] == "template_load_failed"
+        assert responses[0]["templateKey"]
+        assert "rows" not in responses[0]
+        assert responses[1] == {"id": 4, "ok": True, "recognitionDiagnosticsVersion": 1}
+
     def test_unknown_command(self):
         responses = self._run([{"cmd": "nope"}, {"cmd": "quit"}])
         assert len(responses) == 1
@@ -5802,7 +5932,7 @@ class TestREPL:
             timeout=10,
         )
         lines = [l for l in proc.stdout.strip().splitlines() if l]
-        assert json.loads(lines[0]) == {"ok": True}
+        assert json.loads(lines[0]) == {"ok": True, "recognitionDiagnosticsVersion": 1}
         assert json.loads(lines[-1]) == {"avLoaded": False}
 
     def test_set_server_cn_round_trip(self):
@@ -5826,7 +5956,7 @@ class TestREPL:
         # field exists so the test stays focused on the protocol.
         assert "ocrReset" in responses[0]
         assert responses[1]["server"] == "JP"
-        assert responses[2] == {"ok": True}
+        assert responses[2] == {"ok": True, "recognitionDiagnosticsVersion": 1}
 
     def test_release_ocr_is_idempotent(self):
         responses = self._run([

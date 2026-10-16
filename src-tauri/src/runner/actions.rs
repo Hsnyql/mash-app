@@ -37,7 +37,7 @@ pub(crate) enum SelectionDialogKind {
 }
 
 impl Runner {
-    pub(crate) fn execute_turn_skills(&mut self, turn: &BattleTurn) -> bool {
+    pub(crate) fn execute_turn_skills(&mut self, turn: &BattleTurn) -> AutomationResult<bool> {
         for action in turn_preparation_actions(turn) {
             match action {
                 Action::Servant {
@@ -81,18 +81,19 @@ impl Runner {
                         }
                         self.emit_skill_tap_debug("点击从者技能", pos);
                         if !self.tap_at("Battle", pos) {
-                            return self.fail_skill_execution(&action_label, "点击技能按钮失败");
+                            return Ok(self.fail_skill_execution(&action_label, "点击技能按钮失败"));
                         }
                         thread::sleep(SKILL_TAP_DELAY);
-                        let Some(outcome) = self.handle_skill_post_tap(&action_label, expectation)
+                        let Some(outcome) =
+                            self.handle_skill_post_tap(&action_label, expectation)?
                         else {
                             if attempt == 0 && self.config.verify_skill_activation {
                                 continue;
                             }
-                            return self.fail_skill_execution(
+                            return Ok(self.fail_skill_execution(
                                 &action_label,
                                 SKILL_ACTIVATION_NOT_OBSERVED_MESSAGE,
-                            );
+                            ));
                         };
                         if matches!(outcome, SkillPostTapOutcome::AlreadyUsed) {
                             skipped = true;
@@ -102,7 +103,7 @@ impl Runner {
 
                         if let Some(selection) = skill_selection {
                             if !self.execute_skill_selection(selection, &action_label) {
-                                return false;
+                                return Ok(false);
                             }
                         }
 
@@ -114,18 +115,21 @@ impl Runner {
                                 SKILL_WAIT_TIMEOUT,
                                 "等待目标选择框出现…",
                                 "等待目标选择框出现超时",
-                            ) {
+                            )? {
                                 if attempt == 0 && self.config.verify_skill_activation {
                                     continue;
                                 }
-                                return self
-                                    .fail_skill_execution(&action_label, "等待目标选择框出现超时");
+                                return Ok(self.fail_skill_execution(
+                                    &action_label,
+                                    "等待目标选择框出现超时",
+                                ));
                             }
 
                             self.emit_skill_tap_debug("点击技能目标", target_pos);
                             if !self.tap_at("Battle", target_pos) {
-                                return self
-                                    .fail_skill_execution(&action_label, "点击技能目标失败");
+                                return Ok(
+                                    self.fail_skill_execution(&action_label, "点击技能目标失败")
+                                );
                             }
                             self.emit_debug("Battle", "等待目标选择框关闭");
                             if !self.wait_for_element_hidden(
@@ -134,40 +138,42 @@ impl Runner {
                                 SKILL_WAIT_TIMEOUT,
                                 "等待目标选择框关闭…",
                                 "等待目标选择框关闭超时",
-                            ) {
-                                return self
-                                    .fail_skill_execution(&action_label, "等待目标选择框关闭超时");
+                            )? {
+                                return Ok(self.fail_skill_execution(
+                                    &action_label,
+                                    "等待目标选择框关闭超时",
+                                ));
                             }
-                        } else if !self.wait_for_skill_activation_start() {
+                        } else if !self.wait_for_skill_activation_start()? {
                             if attempt == 0 {
                                 continue;
                             }
-                            return self.fail_skill_execution(
+                            return Ok(self.fail_skill_execution(
                                 &action_label,
                                 SKILL_ACTIVATION_NOT_OBSERVED_MESSAGE,
-                            );
+                            ));
                         }
                         triggered = true;
                         break;
                     }
                     if !triggered {
-                        return self.fail_skill_execution(
+                        return Ok(self.fail_skill_execution(
                             &action_label,
                             SKILL_ACTIVATION_NOT_OBSERVED_MESSAGE,
-                        );
+                        ));
                     }
                     if skipped {
                         continue;
                     }
 
-                    self.skip_after_skill();
+                    self.skip_after_skill()?;
 
                     // Skill animation (cut-in, buff effect, etc.) hides the
                     // attack button. Wait for it to reappear before firing
                     // the next skill, otherwise rapid taps land on nothing
                     // or, worse, on whatever overlay is currently shown.
-                    if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT) {
-                        return self.fail_skill_execution(&action_label, "等待攻击按钮超时");
+                    if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT)? {
+                        return Ok(self.fail_skill_execution(&action_label, "等待攻击按钮超时"));
                     }
                 }
                 Action::Equipment {
@@ -193,7 +199,7 @@ impl Runner {
                     self.emit("Battle", "打开御主技能面板");
                     self.emit_skill_tap_debug("点击御主技能面板", EQUIPMENT_BUTTON);
                     if !self.tap_at("Battle", EQUIPMENT_BUTTON) {
-                        return self.fail_skill_execution(&action_label, "打开御主技能面板失败");
+                        return Ok(self.fail_skill_execution(&action_label, "打开御主技能面板失败"));
                     }
                     thread::sleep(ACTION_DELAY);
 
@@ -207,27 +213,29 @@ impl Runner {
                     if let Some(change) = order_change {
                         self.emit_skill_tap_debug("点击御主技能", pos);
                         if !self.tap_at("Battle", pos) {
-                            return self.fail_skill_execution(&action_label, "点击御主技能失败");
+                            return Ok(self.fail_skill_execution(&action_label, "点击御主技能失败"));
                         }
                         thread::sleep(SKILL_TAP_DELAY);
                         let Some(outcome) = self.handle_skill_post_tap(
                             &action_label,
                             SkillPostTapExpectation::OrderChange,
-                        ) else {
-                            return self.fail_skill_execution(
+                        )?
+                        else {
+                            return Ok(self.fail_skill_execution(
                                 &action_label,
                                 SKILL_ACTIVATION_NOT_OBSERVED_MESSAGE,
-                            );
+                            ));
                         };
                         if matches!(outcome, SkillPostTapOutcome::AlreadyUsed) {
                             continue;
                         }
-                        if !self.execute_order_change(change) {
-                            return self
-                                .fail_skill_execution(&action_label, "Order Change 执行失败");
+                        if !self.execute_order_change(change)? {
+                            return Ok(
+                                self.fail_skill_execution(&action_label, "Order Change 执行失败")
+                            );
                         }
-                        if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT) {
-                            return self.fail_skill_execution(&action_label, "等待攻击按钮超时");
+                        if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT)? {
+                            return Ok(self.fail_skill_execution(&action_label, "等待攻击按钮超时"));
                         }
                         thread::sleep(ORDER_CHANGE_EXTRA_SETTLE);
                     } else {
@@ -241,20 +249,21 @@ impl Runner {
                             }
                             self.emit_skill_tap_debug("点击御主技能", pos);
                             if !self.tap_at("Battle", pos) {
-                                return self
-                                    .fail_skill_execution(&action_label, "点击御主技能失败");
+                                return Ok(
+                                    self.fail_skill_execution(&action_label, "点击御主技能失败")
+                                );
                             }
                             thread::sleep(SKILL_TAP_DELAY);
                             let Some(outcome) =
-                                self.handle_skill_post_tap(&action_label, expectation)
+                                self.handle_skill_post_tap(&action_label, expectation)?
                             else {
                                 if attempt == 0 && self.config.verify_skill_activation {
                                     continue;
                                 }
-                                return self.fail_skill_execution(
+                                return Ok(self.fail_skill_execution(
                                     &action_label,
                                     SKILL_ACTIVATION_NOT_OBSERVED_MESSAGE,
-                                );
+                                ));
                             };
                             if matches!(outcome, SkillPostTapOutcome::AlreadyUsed) {
                                 skipped = true;
@@ -270,20 +279,20 @@ impl Runner {
                                     SKILL_WAIT_TIMEOUT,
                                     "等待目标选择框出现…",
                                     "等待目标选择框出现超时",
-                                ) {
+                                )? {
                                     if attempt == 0 && self.config.verify_skill_activation {
                                         continue;
                                     }
-                                    return self.fail_skill_execution(
+                                    return Ok(self.fail_skill_execution(
                                         &action_label,
                                         "等待目标选择框出现超时",
-                                    );
+                                    ));
                                 }
 
                                 self.emit_skill_tap_debug("点击技能目标", target_pos);
                                 if !self.tap_at("Battle", target_pos) {
-                                    return self
-                                        .fail_skill_execution(&action_label, "点击技能目标失败");
+                                    return Ok(self
+                                        .fail_skill_execution(&action_label, "点击技能目标失败"));
                                 }
                                 self.emit_debug("Battle", "等待目标选择框关闭");
                                 if !self.wait_for_element_hidden(
@@ -292,29 +301,29 @@ impl Runner {
                                     SKILL_WAIT_TIMEOUT,
                                     "等待目标选择框关闭…",
                                     "等待目标选择框关闭超时",
-                                ) {
-                                    return self.fail_skill_execution(
+                                )? {
+                                    return Ok(self.fail_skill_execution(
                                         &action_label,
                                         "等待目标选择框关闭超时",
-                                    );
+                                    ));
                                 }
-                            } else if !self.wait_for_skill_activation_start() {
+                            } else if !self.wait_for_skill_activation_start()? {
                                 if attempt == 0 {
                                     continue;
                                 }
-                                return self.fail_skill_execution(
+                                return Ok(self.fail_skill_execution(
                                     &action_label,
                                     SKILL_ACTIVATION_NOT_OBSERVED_MESSAGE,
-                                );
+                                ));
                             }
                             triggered = true;
                             break;
                         }
                         if !triggered {
-                            return self.fail_skill_execution(
+                            return Ok(self.fail_skill_execution(
                                 &action_label,
                                 SKILL_ACTIVATION_NOT_OBSERVED_MESSAGE,
-                            );
+                            ));
                         }
                         if skipped {
                             continue;
@@ -322,9 +331,9 @@ impl Runner {
                     }
 
                     if order_change.is_none() {
-                        self.skip_after_skill();
-                        if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT) {
-                            return self.fail_skill_execution(&action_label, "等待攻击按钮超时");
+                        self.skip_after_skill()?;
+                        if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT)? {
+                            return Ok(self.fail_skill_execution(&action_label, "等待攻击按钮超时"));
                         }
                     }
                 }
@@ -355,18 +364,18 @@ impl Runner {
                         },
                     );
                     if !self.tap_at("Battle", COMMAND_SPELL_BUTTON) {
-                        return self.fail_skill_execution(&action_label, "点击令咒按钮失败");
+                        return Ok(self.fail_skill_execution(&action_label, "点击令咒按钮失败"));
                     }
                     thread::sleep(COMMAND_SPELL_DIALOG_SETTLE);
 
                     if !self.tap_at("Battle", COMMAND_SPELL_OPTIONS[option_idx]) {
-                        return self.fail_skill_execution(&action_label, "选择令咒行动失败");
+                        return Ok(self.fail_skill_execution(&action_label, "选择令咒行动失败"));
                     }
                     thread::sleep(COMMAND_SPELL_DIALOG_SETTLE);
 
                     self.emit("Battle", "确认令咒");
                     if !self.tap_at("Battle", COMMAND_SPELL_CONFIRM) {
-                        return self.fail_skill_execution(&action_label, "确认令咒失败");
+                        return Ok(self.fail_skill_execution(&action_label, "确认令咒失败"));
                     }
                     thread::sleep(COMMAND_SPELL_DIALOG_SETTLE);
 
@@ -377,13 +386,14 @@ impl Runner {
                         SKILL_WAIT_TIMEOUT,
                         "等待令咒目标选择框出现…",
                         "等待令咒目标选择框出现超时",
-                    ) {
-                        return self
-                            .fail_skill_execution(&action_label, "等待令咒目标选择框出现超时");
+                    )? {
+                        return Ok(
+                            self.fail_skill_execution(&action_label, "等待令咒目标选择框出现超时")
+                        );
                     }
 
                     if !self.tap_at("Battle", target_pos) {
-                        return self.fail_skill_execution(&action_label, "点击令咒目标失败");
+                        return Ok(self.fail_skill_execution(&action_label, "点击令咒目标失败"));
                     }
                     self.emit_debug("Battle", "等待令咒目标选择框关闭");
                     if !self.wait_for_element_hidden(
@@ -392,23 +402,24 @@ impl Runner {
                         SKILL_WAIT_TIMEOUT,
                         "等待令咒目标选择框关闭…",
                         "等待令咒目标选择框关闭超时",
-                    ) {
-                        return self
-                            .fail_skill_execution(&action_label, "等待令咒目标选择框关闭超时");
+                    )? {
+                        return Ok(
+                            self.fail_skill_execution(&action_label, "等待令咒目标选择框关闭超时")
+                        );
                     }
 
-                    self.skip_after_skill();
+                    self.skip_after_skill()?;
 
-                    if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT) {
-                        return self.fail_skill_execution(&action_label, "等待攻击按钮超时");
+                    if !self.wait_for_attack_button("Battle", SKILL_WAIT_TIMEOUT)? {
+                        return Ok(self.fail_skill_execution(&action_label, "等待攻击按钮超时"));
                     }
                 }
                 Action::EnemyTarget { target, .. } => {
-                    self.select_enemy_target(target.as_deref());
+                    self.select_enemy_target(target.as_deref())?;
                 }
             }
         }
-        true
+        Ok(true)
     }
 
     fn fail_skill_execution(&self, action_label: &str, reason: &str) -> bool {
@@ -427,35 +438,35 @@ impl Runner {
         );
     }
 
-    fn wait_for_skill_activation_start(&mut self) -> bool {
+    fn wait_for_skill_activation_start(&mut self) -> AutomationResult<bool> {
         if !self.config.verify_skill_activation {
-            return true;
+            return Ok(true);
         }
         self.emit_debug("Battle", "等待战斗菜单隐藏…");
-        self.wait_for_element_hidden(
+        Ok(self.wait_for_element_hidden(
             "Battle",
             BATTLE_ACTION_MENU_ELEMENT,
             SKILL_ACTIVATION_START_TIMEOUT,
             "等待战斗菜单隐藏…",
             SKILL_ACTIVATION_NOT_OBSERVED_MESSAGE,
-        )
+        )?)
     }
 
     fn handle_skill_post_tap(
         &mut self,
         action_label: &str,
         expectation: SkillPostTapExpectation,
-    ) -> Option<SkillPostTapOutcome> {
+    ) -> AutomationResult<Option<SkillPostTapOutcome>> {
         let start = Instant::now();
         let mut tick: u32 = 0;
         let mut logged_template_error = false;
         loop {
             if self.is_cancelled() {
-                return None;
+                return Ok(None);
             }
 
             let probe_started = Instant::now();
-            let probe_result = self.probe_skill_use_dialog();
+            let probe_result = self.probe_skill_use_dialog().recoverable()?;
             let probe_elapsed_ms = probe_started.elapsed().as_millis();
             match probe_result {
                 Ok((probe, image_path)) => {
@@ -480,15 +491,15 @@ impl Runner {
                                 let _ = self
                                     .tap_skip_animation_button("技能确认弹窗已使用，跳过该技能");
                                 thread::sleep(ACTION_DELAY);
-                                return Some(SkillPostTapOutcome::AlreadyUsed);
+                                return Ok(Some(SkillPostTapOutcome::AlreadyUsed));
                             }
                             SkillUseDialogState::Confirm => {
                                 self.emit_debug("Battle", "检测到技能确认弹窗，已点击确认");
                                 if !self.tap_at("Battle", SKILL_USE_CONFIRM_POINT) {
-                                    return None;
+                                    return Ok(None);
                                 }
                                 thread::sleep(ACTION_DELAY);
-                                return Some(SkillPostTapOutcome::Confirmed);
+                                return Ok(Some(SkillPostTapOutcome::Confirmed));
                             }
                         }
                     } else if let Some(err) = probe.error.as_deref() {
@@ -513,10 +524,10 @@ impl Runner {
             }
 
             let expectation_started = Instant::now();
-            let expectation_reached = self.skill_post_tap_expectation_reached(expectation);
+            let expectation_reached = self.skill_post_tap_expectation_reached(expectation)?;
             let expectation_elapsed_ms = expectation_started.elapsed().as_millis();
             if expectation_reached {
-                return Some(SkillPostTapOutcome::ProceedWithoutDialog);
+                return Ok(Some(SkillPostTapOutcome::ProceedWithoutDialog));
             }
 
             if start.elapsed() >= SKILL_ACTIVATION_START_TIMEOUT {
@@ -530,7 +541,7 @@ impl Runner {
                         expectation_elapsed_ms
                     ),
                 );
-                return None;
+                return Ok(None);
             }
             tick += 1;
             if tick % 4 == 1 {
@@ -540,7 +551,9 @@ impl Runner {
         }
     }
 
-    fn probe_skill_use_dialog(&mut self) -> Result<(SkillUseDialogProbe, Option<PathBuf>), String> {
+    fn probe_skill_use_dialog(
+        &mut self,
+    ) -> AutomationResult<(SkillUseDialogProbe, Option<PathBuf>)> {
         if self.config.auto_capture_skill_use_probe {
             let image_path = self.capture_skill_use_probe_frame()?;
             let probe = self.sidecar().probe_skill_use_dialog(
@@ -563,34 +576,44 @@ impl Runner {
         }
     }
 
-    fn skill_post_tap_expectation_reached(&mut self, expectation: SkillPostTapExpectation) -> bool {
-        match expectation {
+    fn skill_post_tap_expectation_reached(
+        &mut self,
+        expectation: SkillPostTapExpectation,
+    ) -> AutomationResult<bool> {
+        Ok(match expectation {
             SkillPostTapExpectation::ActivationStart => self
                 .sidecar()
                 .find_element_by_name(None, BATTLE_SCREEN, BATTLE_ACTION_MENU_ELEMENT)
+                .recoverable()?
                 .map(|matched| !matched.found)
                 .unwrap_or(false),
             SkillPostTapExpectation::TargetPicker => self
                 .sidecar()
                 .find_element_by_name(None, BATTLE_SCREEN, SKILL_TARGET_CLOSE_BUTTON_ELEMENT)
+                .recoverable()?
                 .map(|matched| matched.found)
                 .unwrap_or(false),
             SkillPostTapExpectation::OrderChange => self
                 .sidecar()
                 .find_element_by_name(None, BATTLE_SCREEN, ORDER_CHANGE_CLOSE_BUTTON_ELEMENT)
+                .recoverable()?
                 .map(|matched| matched.found)
                 .unwrap_or(false),
             SkillPostTapExpectation::SelectionDialog(kind) => {
                 let region = skill_selection_close_region(kind);
                 self.sidecar()
                     .find_element(None, SKILL_SELECTION_CLOSE_BUTTON_TEMPLATE, region, 0.8)
+                    .recoverable()?
                     .map(|matched| matched.is_some())
                     .unwrap_or(false)
             }
-        }
+        })
     }
 
-    pub(crate) fn execute_order_change(&mut self, change: &crate::OrderChangeSelection) -> bool {
+    pub(crate) fn execute_order_change(
+        &mut self,
+        change: &crate::OrderChangeSelection,
+    ) -> AutomationResult<bool> {
         let Some(front_pos) = order_change_slot_position(change.front.as_deref(), 0..3) else {
             self.emit_action(
                 "Order Change 前排目标无效，已跳过",
@@ -598,11 +621,11 @@ impl Runner {
                     servant_id: change.front_servant_id,
                 },
             );
-            return true;
+            return Ok(true);
         };
         let Some(front_probe_pos) = order_change_selection_position(change.front.as_deref(), 0..3)
         else {
-            return true;
+            return Ok(true);
         };
         let Some(back_pos) = order_change_slot_position(change.back.as_deref(), 3..6) else {
             self.emit_action(
@@ -611,11 +634,11 @@ impl Runner {
                     servant_id: change.back_servant_id,
                 },
             );
-            return true;
+            return Ok(true);
         };
         let Some(back_probe_pos) = order_change_selection_position(change.back.as_deref(), 3..6)
         else {
-            return true;
+            return Ok(true);
         };
 
         self.emit_debug("Battle", "等待换人框出现");
@@ -625,8 +648,8 @@ impl Runner {
             SKILL_WAIT_TIMEOUT,
             "等待换人框出现…",
             "等待换人框出现超时",
-        ) {
-            return false;
+        )? {
+            return Ok(false);
         }
 
         self.emit_action(
@@ -636,16 +659,16 @@ impl Runner {
                 back_servant_id: change.back_servant_id,
             },
         );
-        if !self.select_order_change_slot_until_confirmed("前排", front_pos, front_probe_pos) {
-            return false;
+        if !self.select_order_change_slot_until_confirmed("前排", front_pos, front_probe_pos)? {
+            return Ok(false);
         }
-        if !self.select_order_change_slot_until_confirmed("后排", back_pos, back_probe_pos) {
-            return false;
+        if !self.select_order_change_slot_until_confirmed("后排", back_pos, back_probe_pos)? {
+            return Ok(false);
         }
 
         self.emit("Battle", "Order Change 点击进行更替");
         if !self.tap_at("Battle", ORDER_CHANGE_CONFIRM) {
-            return false;
+            return Ok(false);
         }
         self.emit_debug("Battle", "等待换人框关闭");
         if !self.wait_for_element_hidden(
@@ -654,10 +677,10 @@ impl Runner {
             SKILL_WAIT_TIMEOUT,
             "等待换人框关闭…",
             "等待换人框关闭超时",
-        ) {
-            return false;
+        )? {
+            return Ok(false);
         }
-        true
+        Ok(true)
     }
 
     /// Click one Order Change slot, then verify its SELECT marker before any
@@ -668,25 +691,24 @@ impl Runner {
         line: &str,
         tap_pos: Point,
         probe_pos: Point,
-    ) -> bool {
+    ) -> AutomationResult<bool> {
         let start = Instant::now();
         loop {
             if self.is_cancelled() {
-                return false;
+                return Ok(false);
             }
             self.emit_skill_tap_debug("点击换人槽位", tap_pos);
             if !self.tap_at("Battle", tap_pos) {
-                return false;
+                return Ok(false);
             }
             thread::sleep(ORDER_CHANGE_SELECTION_CONFIRM_DELAY);
 
             let server = self.server;
-            match self.sidecar().probe_order_change_selection(
-                None,
-                probe_pos.x,
-                probe_pos.y,
-                server,
-            ) {
+            match self
+                .sidecar()
+                .probe_order_change_selection(None, probe_pos.x, probe_pos.y, server)
+                .recoverable()?
+            {
                 Ok(probe) => {
                     self.emit_local_debug(
                         "Battle",
@@ -696,7 +718,7 @@ impl Runner {
                         ),
                     );
                     if probe.selected {
-                        return true;
+                        return Ok(true);
                     }
                 }
                 Err(err) => {
@@ -712,7 +734,7 @@ impl Runner {
                     "Battle",
                     &format!("Order Change {line}选择未确认，已超过确认时间"),
                 );
-                return false;
+                return Ok(false);
             }
             self.emit_warn(
                 "Battle",
@@ -726,20 +748,21 @@ impl Runner {
     /// and is safe to tap whether or not an animation is currently
     /// playing -- on a normal Battle frame this region is the turn-counter
     /// pill which has no interactive effect.
-    pub(crate) fn skip_after_skill(&mut self) {
-        if self.handle_pending_skill_use_dialog_before_skip() {
-            return;
+    pub(crate) fn skip_after_skill(&mut self) -> AutomationResult<()> {
+        if self.handle_pending_skill_use_dialog_before_skip()? {
+            return Ok(());
         }
         let _ = self.tap_skip_animation_button("普通技能后跳过");
         thread::sleep(ACTION_DELAY);
+        Ok(())
     }
 
-    fn handle_pending_skill_use_dialog_before_skip(&mut self) -> bool {
+    fn handle_pending_skill_use_dialog_before_skip(&mut self) -> AutomationResult<bool> {
         if self.is_cancelled() {
-            return false;
+            return Ok(false);
         }
 
-        match self.probe_skill_use_dialog() {
+        Ok(match self.probe_skill_use_dialog().recoverable()? {
             Ok((probe, image_path)) => match classify_skill_use_dialog_probe(&probe) {
                 Some(SkillUseDialogState::AlreadyUsed) => {
                     self.emit_local_debug(
@@ -789,7 +812,7 @@ impl Runner {
                 );
                 false
             }
-        }
+        })
     }
 
     fn tap_skip_animation_button(&mut self, reason: &str) -> bool {
@@ -797,38 +820,38 @@ impl Runner {
         self.tap_at("Battle", SKIP_ANIMATION_BUTTON)
     }
 
-    fn capture_skill_use_probe_frame(&mut self) -> Result<PathBuf, String> {
+    fn capture_skill_use_probe_frame(&mut self) -> AutomationResult<PathBuf> {
         let dir = crate::app_data_dir(&self.app_handle)
             .join("debug")
             .join("skill-use-probes");
-        std::fs::create_dir_all(&dir)
-            .map_err(|err| format!("创建技能确认 probe 截图目录失败: {err}"))?;
+        std::fs::create_dir_all(&dir).context("创建技能确认 probe 截图目录失败")?;
         let timestamp_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|err| format!("获取技能确认 probe 时间戳失败: {err}"))?
+            .context("获取技能确认 probe 时间戳失败")?
             .as_millis();
         let path = dir.join(format!("skill-use-probe-{timestamp_ms}.jpg"));
         let jpeg = self
             .sidecar()
             .get_frame_jpeg(0.0)
-            .map_err(|err| format!("获取技能确认 probe 视频帧失败: {err}"))?;
-        std::fs::write(&path, jpeg).map_err(|err| format!("写入技能确认 probe 截图失败: {err}"))?;
+            .context("获取技能确认 probe 视频帧失败")?;
+        std::fs::write(&path, jpeg).context("写入技能确认 probe 截图失败")?;
         Ok(path)
     }
 
-    pub(crate) fn select_enemy_target(&mut self, target: Option<&str>) {
+    pub(crate) fn select_enemy_target(&mut self, target: Option<&str>) -> AutomationResult<()> {
         let Some(point) = enemy_target_position(target) else {
-            return;
+            return Ok(());
         };
         self.emit(
             "Battle",
             &format!("选择敌方目标: {}", target.unwrap_or("?")),
         );
         if !self.tap_at("Battle", point) {
-            return;
+            return Ok(());
         }
         thread::sleep(ACTION_DELAY);
-        self.skip_after_skill();
+        self.skip_after_skill()?;
+        Ok(())
     }
 
     fn execute_skill_selection(

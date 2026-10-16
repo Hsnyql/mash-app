@@ -2,6 +2,8 @@ use crate::platform::adb_executable_name;
 use std::path::PathBuf;
 use tauri::Manager;
 
+mod display;
+
 pub(crate) const BLUESTACKS_SERIAL: &str = "127.0.0.1:5555";
 
 pub(crate) use crate::platform::external_command as adb_command;
@@ -11,6 +13,8 @@ pub struct Adb {
     adb_path: PathBuf,
     device: Option<String>,
     selected_serial: Option<String>,
+    display_id: u32,
+    mumu_lookup: std::sync::Arc<std::sync::Mutex<()>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,11 +56,28 @@ pub(crate) fn resolve_adb_path(app: &tauri::AppHandle) -> PathBuf {
 }
 
 impl Adb {
+    /// Keep the enumerated transport even if it disconnects during preview.
+    pub(crate) fn from_ready_serial(
+        app: &tauri::AppHandle,
+        adb_path: PathBuf,
+        serial: String,
+    ) -> Self {
+        Self {
+            adb_path,
+            device: Some(serial),
+            selected_serial: None,
+            display_id: 0,
+            mumu_lookup: app.state::<crate::platform::MuMuLookupState>().0.clone(),
+        }
+    }
+
     pub fn new(app: &tauri::AppHandle, selected_serial: Option<String>) -> Self {
         Self {
             adb_path: resolve_adb_path(app),
             device: None,
             selected_serial,
+            display_id: 0,
+            mumu_lookup: app.state::<crate::platform::MuMuLookupState>().0.clone(),
         }
     }
 
@@ -67,6 +88,47 @@ impl Adb {
 
     pub fn path(&self) -> &std::path::Path {
         &self.adb_path
+    }
+
+    /// Bound by game package so capture and input ignore foreground tab changes.
+    pub fn display_id(&self) -> u32 {
+        self.display_id
+    }
+
+    pub(crate) fn connect_for_server(&mut self, server: crate::Server) -> Result<(), String> {
+        self.connect()?;
+        self.bind_game_display(server)
+    }
+
+    pub(crate) fn bind_game_display(&mut self, server: crate::Server) -> Result<(), String> {
+        self.display_id = 0;
+        let _lookup = self.mumu_lookup.lock().map_err(|_| "MuMu SDK 查询锁异常")?;
+        let serial = self.serial().ok_or("ADB 尚未连接")?;
+        self.display_id =
+            crate::platform::resolve_mumu_display(self.path(), serial, server.game_package())?
+                .unwrap_or(0);
+        Ok(())
+    }
+
+    /// Small, bounded property reads used only after recognition has failed.
+    pub(crate) fn diagnostic_device_info(&self) -> serde_json::Value {
+        let property = |name: &str| -> Option<String> {
+            let mut command = adb_command(&self.adb_path);
+            command
+                .args(self.base_args())
+                .args(["shell", "getprop", name]);
+            let output = crate::platform::output_with_timeout(
+                &mut command,
+                std::time::Duration::from_secs(2),
+            )
+            .ok()?;
+            output
+                .status
+                .success()
+                .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        };
+        serde_json::json!({"model": property("ro.product.model"),
+                          "androidVersion": property("ro.build.version.release")})
     }
 
     fn base_args(&self) -> Vec<String> {
@@ -215,6 +277,7 @@ impl Adb {
         self.device = Self::select_ready_serial(&devices, self.selected_serial.as_deref())?;
 
         if self.device.is_some() {
+            self.display_id = 0;
             Ok(())
         } else {
             Err("no device found".into())
@@ -226,6 +289,9 @@ impl Adb {
     pub fn screen_size(&self) -> Option<(u32, u32)> {
         let mut args = self.base_args();
         args.extend(["shell".into(), "wm".into(), "size".into()]);
+        if self.display_id != 0 {
+            args.extend(["-d".into(), self.display_id.to_string()]);
+        }
         let output = adb_command(&self.adb_path).args(&args).output().ok()?;
         if !output.status.success() {
             return None;
@@ -245,26 +311,9 @@ impl Adb {
     /// Capture a screenshot and write the PNG to a temp file.
     /// Returns the path. Caller is responsible for deleting the file.
     ///
-    /// Superseded by the scrcpy video stream in production paths; kept for
-    /// tests and one-off debugging.
-    #[allow(dead_code)]
+    /// Raw screenshot export; live CV uses scrcpy instead.
     pub fn screenshot_to_file(&self) -> Result<PathBuf, String> {
-        let mut args = self.base_args();
-        args.extend(["exec-out".into(), "screencap".into(), "-p".into()]);
-
-        let output = adb_command(&self.adb_path)
-            .args(&args)
-            .output()
-            .map_err(|e| format!("adb screencap failed: {e}"))?;
-
-        if !output.status.success() {
-            return Err(format!("adb screencap exited with: {}", output.status));
-        }
-
-        if output.stdout.is_empty() {
-            return Err("adb screencap returned empty output".into());
-        }
-
+        let png = self.screenshot_png()?;
         let tmp = tempfile::Builder::new()
             .suffix(".png")
             .tempfile()
@@ -276,21 +325,14 @@ impl Adb {
         tmp.persist(&path)
             .map_err(|e| format!("failed to persist temp file: {e}"))?;
 
-        std::fs::write(&path, &output.stdout)
-            .map_err(|e| format!("failed to write screenshot: {e}"))?;
+        std::fs::write(&path, &png).map_err(|e| format!("failed to write screenshot: {e}"))?;
 
         Ok(path)
     }
 
     pub fn tap(&self, x: u32, y: u32) -> Result<(), String> {
-        let mut args = self.base_args();
-        args.extend([
-            "shell".into(),
-            "input".into(),
-            "tap".into(),
-            x.to_string(),
-            y.to_string(),
-        ]);
+        let mut args = self.input_args();
+        args.extend(["tap".into(), x.to_string(), y.to_string()]);
 
         let output = adb_command(&self.adb_path)
             .args(&args)
@@ -304,10 +346,8 @@ impl Adb {
     }
 
     pub fn swipe(&self, from: (u32, u32), to: (u32, u32), duration_ms: u32) -> Result<(), String> {
-        let mut args = self.base_args();
+        let mut args = self.input_args();
         args.extend([
-            "shell".into(),
-            "input".into(),
             "swipe".into(),
             from.0.to_string(),
             from.1.to_string(),
@@ -359,7 +399,8 @@ impl Adb {
         swipe_ms: u32,
         settle_ms: u32,
     ) -> Result<(), String> {
-        let script = build_settle_swipe_script(from, to, swipe_ms, settle_ms);
+        let script =
+            build_settle_swipe_script_for_display(from, to, swipe_ms, settle_ms, self.display_id);
         let mut args = self.base_args();
         args.extend(["shell".into(), script]);
 
@@ -424,17 +465,29 @@ fn settle_swipe_move_steps(swipe_ms: u32) -> u32 {
 /// with `swipe_ms` via `settle_swipe_move_steps` so a short swipe gets
 /// the minimum smoothing budget and a long swipe spreads MOVE events
 /// across the full duration at ~50 Hz instead of clumping them.
+#[cfg(test)]
 fn build_settle_swipe_script(
     from: (u32, u32),
     to: (u32, u32),
     swipe_ms: u32,
     settle_ms: u32,
 ) -> String {
+    build_settle_swipe_script_for_display(from, to, swipe_ms, settle_ms, 0)
+}
+
+fn build_settle_swipe_script_for_display(
+    from: (u32, u32),
+    to: (u32, u32),
+    swipe_ms: u32,
+    settle_ms: u32,
+    display_id: u32,
+) -> String {
     let steps = settle_swipe_move_steps(swipe_ms);
     let step_sleep_s = (swipe_ms as f64 / steps as f64) / 1000.0;
     let settle_s = settle_ms as f64 / 1000.0;
 
-    let mut script = format!("input motionevent DOWN {} {}", from.0, from.1);
+    let input = display::input_command(display_id);
+    let mut script = format!("{input} motionevent DOWN {} {}", from.0, from.1);
     for i in 1..=steps {
         // Linear interpolation from `from` to `to`. Round to nearest
         // integer pixel; saturate at zero for safety.
@@ -444,7 +497,7 @@ fn build_settle_swipe_script(
         let x = x.max(0.0) as u32;
         let y = y.max(0.0) as u32;
         script.push_str(&format!(
-            "; sleep {step_sleep_s:.3}; input motionevent MOVE {x} {y}"
+            "; sleep {step_sleep_s:.3}; {input} motionevent MOVE {x} {y}"
         ));
     }
     // Hold at `to` for `settle_ms` so the velocity tracker's sliding
@@ -453,7 +506,7 @@ fn build_settle_swipe_script(
     // explicit, which is more robust across Android versions than
     // relying on the implicit "no events" interpretation.
     script.push_str(&format!(
-        "; sleep {settle_s:.3}; input motionevent MOVE {} {}; input motionevent UP {} {}",
+        "; sleep {settle_s:.3}; {input} motionevent MOVE {} {}; {input} motionevent UP {} {}",
         to.0, to.1, to.0, to.1
     ));
     script

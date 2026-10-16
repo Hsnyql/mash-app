@@ -73,6 +73,7 @@ impl Runner {
             let s = self.state.lock().unwrap();
             (format!("{:?}", *s), s.status())
         };
+        crate::recognition_diagnostics::logs::record(&self.app_handle, screen, message);
         let _ = self.app_handle.emit(
             "automation-status",
             AutomationEvent {
@@ -163,17 +164,17 @@ impl Runner {
         }
     }
 
-    pub(crate) fn tap_attack_button(&mut self) -> bool {
-        if !self.prepare_noble_phantasm_gauge_before_attack() {
-            return false;
+    pub(crate) fn tap_attack_button(&mut self) -> AutomationResult<bool> {
+        if !self.prepare_noble_phantasm_gauge_before_attack()? {
+            return Ok(false);
         }
-        self.capture_before_attack_if_enabled();
+        self.capture_before_attack_if_enabled()?;
         if !self.tap_at("Battle", ATTACK_BUTTON) {
-            return false;
+            return Ok(false);
         }
         self.battle
             .transition(BattleFlowEvent::AttackButtonTapped { at: Instant::now() });
-        true
+        Ok(true)
     }
 
     pub(crate) fn swipe_at(
@@ -244,15 +245,15 @@ impl Runner {
         point: Point,
         interval: Duration,
         timeout: Duration,
-    ) -> bool {
+    ) -> AutomationResult<bool> {
         let start = std::time::Instant::now();
         let mut taps: u32 = 0;
         loop {
             if self.is_cancelled() {
-                return false;
+                return Ok(false);
             }
             if !self.tap_at(screen_label, point) {
-                return false;
+                return Ok(false);
             }
             taps += 1;
             thread::sleep(interval);
@@ -260,16 +261,20 @@ impl Runner {
             // "screen unchanged" so we keep tapping rather than bailing.
             // A persistent CV error will surface on the main loop's
             // next iteration via the same call path.
-            let detected = self.sidecar().detect(None).unwrap_or(from_screen);
+            let detected = self
+                .sidecar()
+                .detect(None)
+                .recoverable()?
+                .unwrap_or(from_screen);
             if detected != from_screen {
-                return true;
+                return Ok(true);
             }
             if start.elapsed() >= timeout {
                 self.emit(
                     screen_label,
                     &format!("等待画面切换超时 (已点击 {taps} 次)"),
                 );
-                return false;
+                return Ok(false);
             }
         }
     }
@@ -286,32 +291,33 @@ impl Runner {
         point: Point,
         interval: Duration,
         timeout: Duration,
-    ) -> bool {
+    ) -> AutomationResult<bool> {
         let start = std::time::Instant::now();
         let mut taps: u32 = 0;
         loop {
             if self.is_cancelled() {
-                return false;
+                return Ok(false);
             }
             if !self.tap_at(screen_label, point) {
-                return false;
+                return Ok(false);
             }
             taps += 1;
             thread::sleep(interval);
             let detected = self
                 .sidecar()
                 .detect_label_full(None)
+                .recoverable()?
                 .map(|(label, _)| label)
                 .unwrap_or_else(|_| from_label.to_string());
             if detected != from_label {
-                return true;
+                return Ok(true);
             }
             if start.elapsed() >= timeout {
                 self.emit(
                     screen_label,
                     &format!("等待画面切换超时 (已点击 {taps} 次)"),
                 );
-                return false;
+                return Ok(false);
             }
         }
     }
@@ -323,8 +329,15 @@ impl Runner {
         timeout: Duration,
         status_text: &str,
         timeout_text: &str,
-    ) -> bool {
-        self.wait_for_element_state(screen, element, true, timeout, status_text, timeout_text)
+    ) -> AutomationResult<bool> {
+        Ok(self.wait_for_element_state(
+            screen,
+            element,
+            true,
+            timeout,
+            status_text,
+            timeout_text,
+        )?)
     }
 
     pub(crate) fn wait_for_element_hidden(
@@ -334,8 +347,15 @@ impl Runner {
         timeout: Duration,
         status_text: &str,
         timeout_text: &str,
-    ) -> bool {
-        self.wait_for_element_state(screen, element, false, timeout, status_text, timeout_text)
+    ) -> AutomationResult<bool> {
+        Ok(self.wait_for_element_state(
+            screen,
+            element,
+            false,
+            timeout,
+            status_text,
+            timeout_text,
+        )?)
     }
 
     pub(crate) fn wait_for_element_state(
@@ -346,16 +366,17 @@ impl Runner {
         timeout: Duration,
         status_text: &str,
         timeout_text: &str,
-    ) -> bool {
+    ) -> AutomationResult<bool> {
         let start = std::time::Instant::now();
         let mut tick: u32 = 0;
         loop {
             if self.is_cancelled() {
-                return false;
+                return Ok(false);
             }
             let found = match self
                 .sidecar()
                 .find_element_by_name(None, BATTLE_SCREEN, element)
+                .recoverable()?
             {
                 Ok(matched) => Some(matched.found),
                 Err(err) => {
@@ -366,11 +387,11 @@ impl Runner {
                 }
             };
             if found == Some(expected_found) {
-                return true;
+                return Ok(true);
             }
             if start.elapsed() >= timeout {
                 self.emit_warn(screen, timeout_text);
-                return false;
+                return Ok(false);
             }
             tick += 1;
             if tick % 4 == 1 {
@@ -385,22 +406,28 @@ impl Runner {
     /// battle action menu to be visible so a transient match in the
     /// bottom-right corner does not release the runner while overlays are
     /// still unwinding.
-    pub(crate) fn wait_for_attack_button(&mut self, screen: &str, timeout: Duration) -> bool {
+    pub(crate) fn wait_for_attack_button(
+        &mut self,
+        screen: &str,
+        timeout: Duration,
+    ) -> AutomationResult<bool> {
         let start = Instant::now();
         let mut tick: u32 = 0;
         let mut last_visibility: Option<(bool, bool)> = None;
         loop {
             if self.is_cancelled() {
-                return false;
+                return Ok(false);
             }
             let attack_visible = self
                 .sidecar()
                 .find_element_by_name(None, BATTLE_SCREEN, ATTACK_BUTTON_ELEMENT)
+                .recoverable()?
                 .map(|matched| matched.found)
                 .unwrap_or(false);
             let menu_visible = self
                 .sidecar()
                 .find_element_by_name(None, BATTLE_SCREEN, BATTLE_ACTION_MENU_ELEMENT)
+                .recoverable()?
                 .map(|matched| matched.found)
                 .unwrap_or(false);
             let visibility = (attack_visible, menu_visible);
@@ -414,7 +441,7 @@ impl Runner {
                 last_visibility = Some(visibility);
             }
             if attack_visible && menu_visible {
-                return true;
+                return Ok(true);
             }
             if start.elapsed() >= timeout {
                 self.emit_local_debug(
@@ -424,7 +451,7 @@ impl Runner {
                     ),
                 );
                 self.emit_warn(screen, "等待攻击按钮超时");
-                return false;
+                return Ok(false);
             }
             tick += 1;
             if tick % 4 == 1 {

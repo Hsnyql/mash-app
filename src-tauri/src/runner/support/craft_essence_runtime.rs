@@ -79,72 +79,72 @@ impl Runner {
         template_path: &Path,
         label: &str,
         mut options: SupportCeVerificationOptions,
-    ) -> Option<SupportCeMismatch> {
+    ) -> AutomationResult<Option<SupportCeMismatch>> {
         let support_ce_threshold = self.config.support_ce_threshold;
         options.full_gate_threshold = self.config.support_ce_full_gate_threshold;
         options.mlb_icon_threshold = self.config.support_mlb_icon_threshold;
         options.bond_icon_threshold = self.config.support_bond_icon_threshold;
-        match self.sidecar().verify_support_ce(
-            None,
-            region,
-            template_path,
-            support_ce_threshold,
-            options,
-        ) {
-            Ok(result) => {
-                let effective_threshold = if result.threshold > 0.0 {
-                    result.threshold
-                } else {
-                    support_ce_threshold
-                };
-                eprintln!(
-                    "[runner] {label} verify: score={:.3} threshold={:.2} -> {}",
-                    result.score,
-                    effective_threshold,
-                    if result.passed { "PASS" } else { "skip" },
-                );
-                if !result.artwork_checks.is_empty() {
+        Ok(
+            match self
+                .sidecar()
+                .verify_support_ce(None, region, template_path, support_ce_threshold, options)
+                .recoverable()?
+            {
+                Ok(result) => {
+                    let effective_threshold = if result.threshold > 0.0 {
+                        result.threshold
+                    } else {
+                        support_ce_threshold
+                    };
                     eprintln!(
-                        "[runner] {label} variants: {}",
-                        format_ce_artwork_checks(&result.artwork_checks),
+                        "[runner] {label} verify: score={:.3} threshold={:.2} -> {}",
+                        result.score,
+                        effective_threshold,
+                        if result.passed { "PASS" } else { "skip" },
                     );
+                    if !result.artwork_checks.is_empty() {
+                        eprintln!(
+                            "[runner] {label} variants: {}",
+                            format_ce_artwork_checks(&result.artwork_checks),
+                        );
+                    }
+                    for check in &result.icon_checks {
+                        eprintln!(
+                            "[runner] {label} {} icon: score={:.3} threshold={:.2} -> {}",
+                            check.kind,
+                            check.score,
+                            check.threshold,
+                            if check.passed { "PASS" } else { "skip" },
+                        );
+                    }
+                    mismatch_from_ce_result(label, &result, effective_threshold)
                 }
-                for check in &result.icon_checks {
-                    eprintln!(
-                        "[runner] {label} {} icon: score={:.3} threshold={:.2} -> {}",
-                        check.kind,
-                        check.score,
-                        check.threshold,
-                        if check.passed { "PASS" } else { "skip" },
-                    );
+                Err(e) => {
+                    eprintln!("[runner] support CE verify failed (treating as skip): {e}");
+                    Some(SupportCeMismatch::reason_only(format!("{label} 校验失败")))
                 }
-                mismatch_from_ce_result(label, &result, effective_threshold)
-            }
-            Err(e) => {
-                eprintln!("[runner] support CE verify failed (treating as skip): {e}");
-                Some(SupportCeMismatch::reason_only(format!("{label} 校验失败")))
-            }
-        }
+            },
+        )
     }
 
     pub(crate) fn support_row_ce_mismatch(
         &mut self,
         row: &SupportRowMatch,
-    ) -> Option<SupportCeMismatch> {
-        if self.config.support_grand_mode {
+    ) -> AutomationResult<Option<SupportCeMismatch>> {
+        Ok(if self.config.support_grand_mode {
             let templates = self.resolve_support_grand_ce_templates();
             if templates.iter().any(|items| !items.is_empty()) && row.score_anchor.is_none() {
-                return Some(SupportCeMismatch::reason_only("确认按钮未完整显示"));
+                return Ok(Some(SupportCeMismatch::reason_only("确认按钮未完整显示")));
             }
             for (index, slot_templates) in templates.iter().enumerate() {
                 if slot_templates.is_empty() {
                     continue;
                 }
                 let Some(region) = Self::support_grand_ce_search_region(row, index) else {
-                    return Some(SupportCeMismatch::reason_only(format!(
+                    return Ok(Some(SupportCeMismatch::reason_only(format!(
                         "冠位礼装 {} 区域无效",
                         index + 1
-                    )));
+                    ))));
                 };
                 let mut final_mismatch = None;
                 for (candidate_index, template) in slot_templates.iter().enumerate() {
@@ -171,7 +171,7 @@ impl Runner {
                             },
                             ..Default::default()
                         },
-                    ) {
+                    )? {
                         None => {
                             final_mismatch = None;
                             break;
@@ -180,19 +180,19 @@ impl Runner {
                     }
                 }
                 if let Some(reason) = final_mismatch {
-                    return Some(reason);
+                    return Ok(Some(reason));
                 }
             }
             None
         } else {
             let templates = self.resolve_support_ce_templates();
             if templates.is_empty() {
-                return None;
+                return Ok(None);
             }
             let Some(region) = Self::support_ce_search_region(row) else {
-                return Some(SupportCeMismatch::reason_only(
+                return Ok(Some(SupportCeMismatch::reason_only(
                     "助战编队确认锚点未识别，无法定位礼装",
-                ));
+                )));
             };
             let mut final_mismatch = None;
             for (index, template) in templates.iter().enumerate() {
@@ -210,8 +210,8 @@ impl Runner {
                         grand_bond_ce_mode: None,
                         ..Default::default()
                     },
-                ) {
-                    None => return None,
+                )? {
+                    None => return Ok(None),
                     Some(mismatch) => final_mismatch = Some(mismatch),
                 }
             }
@@ -228,6 +228,6 @@ impl Runner {
                 },
                 debug_summary: mismatch.debug_summary,
             })
-        }
+        })
     }
 }

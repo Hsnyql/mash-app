@@ -248,9 +248,6 @@ pub struct RunConfig {
     pub auto_capture_battle_before_attack: bool,
     #[serde(default)]
     pub auto_friend_request: bool,
-    /// Save one current stream frame when Unknown screen detection times out.
-    #[serde(default)]
-    pub auto_capture_unknown_screen_timeout: bool,
     /// Save the exact frame used by the skill-use dialog probe.
     #[serde(default)]
     pub auto_capture_skill_use_probe: bool,

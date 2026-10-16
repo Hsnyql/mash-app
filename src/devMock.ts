@@ -105,7 +105,6 @@ let imageRecognitionDebugMode: "enabled" | "shadow" | "disabled" = "disabled";
 let sequenceRecognitionDebugMode: "enabled" | "shadow" | "disabled" = "disabled";
 let autoCaptureBattleBeforeAttack = false;
 let autoCaptureBattleResultLoot = false;
-let autoCaptureUnknownScreenTimeout = false;
 let autoCaptureSkillUseProbe = false;
 let autoCaptureUnrecognizedCriticalChance = false;
 let simulateStuckAttackSelection = false;
@@ -253,7 +252,6 @@ function debugSettings() {
     sequenceRecognitionDebugMode,
     autoCaptureBattleBeforeAttack,
     autoCaptureBattleResultLoot,
-    autoCaptureUnknownScreenTimeout,
     autoCaptureSkillUseProbe,
     autoCaptureUnrecognizedCriticalChance,
     simulateStuckAttackSelection,
@@ -654,9 +652,6 @@ async function invokeLegacyDevMock<T>(cmd: string, args: InvokeArgs = {}): Promi
     case "set_auto_capture_battle_result_loot":
       autoCaptureBattleResultLoot = Boolean(args.value);
       return debugSettings() as T;
-    case "set_auto_capture_unknown_screen_timeout":
-      autoCaptureUnknownScreenTimeout = Boolean(args.value);
-      return debugSettings() as T;
     case "set_auto_capture_skill_use_probe":
       autoCaptureSkillUseProbe = Boolean(args.value);
       return debugSettings() as T;
@@ -728,6 +723,10 @@ async function invokeLegacyDevMock<T>(cmd: string, args: InvokeArgs = {}): Promi
       return {
         appVersion: "0.5.4",
         cvRuntimeVersion: "2026.05.08-runtime1",
+        templates: [
+          { server: "JP", checked: 180, errors: [] },
+          { server: "CN", checked: 150, errors: [] },
+        ],
         cvRuntimeInstalled: false,
         cvCodeVersion: "2026.05.08-code1",
         cvCodeInstalled: false,

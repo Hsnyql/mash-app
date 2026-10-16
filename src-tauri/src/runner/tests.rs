@@ -900,26 +900,6 @@ fn support_search_worker_releases_only_after_a_confirmed_screen_exit() {
 }
 
 #[test]
-fn unknown_screen_timeout_screenshot_path_uses_debug_directory() {
-    let root = PathBuf::from("/tmp/mash-app-test");
-
-    assert_eq!(
-        unknown_screen_timeout_screenshot_dir_in_root(&root),
-        root.join("debug").join("unknown-screen-timeouts")
-    );
-}
-
-#[test]
-fn unknown_screen_timeout_screenshot_filename_includes_timestamp_and_run() {
-    let timestamp = std::time::UNIX_EPOCH + Duration::from_millis(12_345);
-
-    assert_eq!(
-        unknown_screen_timeout_screenshot_filename(timestamp, 2),
-        "unknown-0000000012345-run0003.jpg"
-    );
-}
-
-#[test]
 fn bond_level_up_screenshot_path_uses_dedicated_directory_and_sortable_name() {
     let root = PathBuf::from("/tmp/mash-app-test");
     let timestamp = std::time::UNIX_EPOCH + Duration::from_millis(12_345);
@@ -1077,7 +1057,6 @@ fn run_config_defaults_support_ce_to_none_when_field_missing() {
     );
     assert!(!cfg.auto_capture_battle_before_attack);
     assert!(!cfg.auto_capture_battle_result_loot);
-    assert!(!cfg.auto_capture_unknown_screen_timeout);
     assert!(!cfg.auto_capture_skill_use_probe);
     assert!(!cfg.auto_capture_unrecognized_critical_chance);
     assert!(!cfg.prefer_higher_critical_chance);

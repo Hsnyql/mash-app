@@ -45,7 +45,10 @@ def test_frozen_runtime_reads_unicode_templates_and_starts_ocr_worker(tmp_path, 
     )
     assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
     replies = [json.loads(line) for line in result.stdout.decode("utf-8").splitlines() if line]
-    assert replies[0] == {"id": 1, "ok": True}
+    # Ping can advertise optional capabilities in addition to readiness.
+    assert replies[0]["id"] == 1
+    assert replies[0]["ok"] is True
+    assert replies[0]["recognitionDiagnosticsVersion"] == 1
     assert replies[1]["count"] == 1
     assert replies[2]["id"] == 3
     assert "error" not in replies[2], (replies[2], result.stderr.decode("utf-8", errors="replace"))

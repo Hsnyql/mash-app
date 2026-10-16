@@ -14,7 +14,6 @@ fn debug_settings_default_disables_debug_captures() {
     );
     assert!(!settings.auto_capture_battle_before_attack);
     assert!(!settings.auto_capture_battle_result_loot);
-    assert!(!settings.auto_capture_unknown_screen_timeout);
     assert!(!settings.auto_capture_skill_use_probe);
     assert!(!settings.auto_capture_unrecognized_critical_chance);
     assert!(!settings.simulate_stuck_attack_selection);
@@ -34,7 +33,6 @@ fn debug_settings_deserializes_legacy_json_with_debug_capture_defaults() {
     );
     assert!(!settings.auto_capture_battle_before_attack);
     assert!(!settings.auto_capture_battle_result_loot);
-    assert!(!settings.auto_capture_unknown_screen_timeout);
     assert!(!settings.auto_capture_skill_use_probe);
     assert!(!settings.auto_capture_unrecognized_critical_chance);
     assert!(!settings.simulate_stuck_attack_selection);
@@ -47,7 +45,6 @@ fn debug_settings_round_trips_debug_capture_settings() {
         "sequenceRecognitionDebugMode": "enabled",
         "autoCaptureBattleBeforeAttack": true,
         "autoCaptureBattleResultLoot": true,
-        "autoCaptureUnknownScreenTimeout": true,
         "autoCaptureSkillUseProbe": true,
         "autoCaptureUnrecognizedCriticalChance": true,
         "simulateStuckAttackSelection": true,
@@ -64,7 +61,6 @@ fn debug_settings_round_trips_debug_capture_settings() {
     );
     assert!(settings.auto_capture_battle_before_attack);
     assert!(settings.auto_capture_battle_result_loot);
-    assert!(settings.auto_capture_unknown_screen_timeout);
     assert!(settings.auto_capture_skill_use_probe);
     assert!(settings.auto_capture_unrecognized_critical_chance);
     assert!(settings.simulate_stuck_attack_selection);
@@ -82,10 +78,6 @@ fn debug_settings_round_trips_debug_capture_settings() {
     );
     assert_eq!(
         serde_json::to_value(settings).unwrap()["autoCaptureBattleResultLoot"],
-        serde_json::json!(true)
-    );
-    assert_eq!(
-        serde_json::to_value(settings).unwrap()["autoCaptureUnknownScreenTimeout"],
         serde_json::json!(true)
     );
     assert_eq!(
@@ -109,7 +101,6 @@ fn debug_settings_runtime_filter_forces_debug_captures_off_when_disallowed() {
         sequence_recognition_debug_mode: ImageRecognitionDebugMode::Enabled,
         auto_capture_battle_before_attack: true,
         auto_capture_battle_result_loot: true,
-        auto_capture_unknown_screen_timeout: true,
         auto_capture_skill_use_probe: true,
         auto_capture_unrecognized_critical_chance: true,
         simulate_stuck_attack_selection: true,
@@ -127,7 +118,6 @@ fn debug_settings_runtime_filter_forces_debug_captures_off_when_disallowed() {
     );
     assert!(!filtered.auto_capture_battle_before_attack);
     assert!(!filtered.auto_capture_battle_result_loot);
-    assert!(!filtered.auto_capture_unknown_screen_timeout);
     assert!(!filtered.auto_capture_skill_use_probe);
     assert!(!filtered.auto_capture_unrecognized_critical_chance);
     assert!(!filtered.simulate_stuck_attack_selection);
@@ -140,7 +130,6 @@ fn debug_settings_runtime_filter_preserves_debug_captures_when_allowed() {
         sequence_recognition_debug_mode: ImageRecognitionDebugMode::Enabled,
         auto_capture_battle_before_attack: true,
         auto_capture_battle_result_loot: true,
-        auto_capture_unknown_screen_timeout: true,
         auto_capture_skill_use_probe: true,
         auto_capture_unrecognized_critical_chance: true,
         simulate_stuck_attack_selection: true,
@@ -158,20 +147,18 @@ fn debug_settings_runtime_filter_preserves_debug_captures_when_allowed() {
     );
     assert!(filtered.auto_capture_battle_before_attack);
     assert!(filtered.auto_capture_battle_result_loot);
-    assert!(filtered.auto_capture_unknown_screen_timeout);
     assert!(filtered.auto_capture_skill_use_probe);
     assert!(filtered.auto_capture_unrecognized_critical_chance);
     assert!(filtered.simulate_stuck_attack_selection);
 }
 
 #[test]
-fn debug_settings_auto_loot_update_preserves_unknown_timeout_capture() {
+fn debug_settings_auto_loot_update_preserves_other_captures() {
     let settings = DebugSettings {
         image_recognition_debug_mode: ImageRecognitionDebugMode::Shadow,
         sequence_recognition_debug_mode: ImageRecognitionDebugMode::Disabled,
         auto_capture_battle_before_attack: true,
         auto_capture_battle_result_loot: false,
-        auto_capture_unknown_screen_timeout: true,
         auto_capture_skill_use_probe: false,
         auto_capture_unrecognized_critical_chance: true,
         simulate_stuck_attack_selection: true,
@@ -181,30 +168,6 @@ fn debug_settings_auto_loot_update_preserves_unknown_timeout_capture() {
 
     assert!(next.auto_capture_battle_before_attack);
     assert!(next.auto_capture_battle_result_loot);
-    assert!(next.auto_capture_unknown_screen_timeout);
-    assert!(!next.auto_capture_skill_use_probe);
-    assert!(next.auto_capture_unrecognized_critical_chance);
-    assert!(next.simulate_stuck_attack_selection);
-}
-
-#[test]
-fn debug_settings_unknown_timeout_update_preserves_auto_loot_capture() {
-    let settings = DebugSettings {
-        image_recognition_debug_mode: ImageRecognitionDebugMode::Shadow,
-        sequence_recognition_debug_mode: ImageRecognitionDebugMode::Disabled,
-        auto_capture_battle_before_attack: true,
-        auto_capture_battle_result_loot: true,
-        auto_capture_unknown_screen_timeout: false,
-        auto_capture_skill_use_probe: false,
-        auto_capture_unrecognized_critical_chance: true,
-        simulate_stuck_attack_selection: true,
-    };
-
-    let next = debug_settings_with_auto_capture_unknown_screen_timeout(settings, true);
-
-    assert!(next.auto_capture_battle_before_attack);
-    assert!(next.auto_capture_battle_result_loot);
-    assert!(next.auto_capture_unknown_screen_timeout);
     assert!(!next.auto_capture_skill_use_probe);
     assert!(next.auto_capture_unrecognized_critical_chance);
     assert!(next.simulate_stuck_attack_selection);
@@ -217,7 +180,6 @@ fn debug_settings_skill_use_probe_update_preserves_other_captures() {
         sequence_recognition_debug_mode: ImageRecognitionDebugMode::Disabled,
         auto_capture_battle_before_attack: true,
         auto_capture_battle_result_loot: true,
-        auto_capture_unknown_screen_timeout: true,
         auto_capture_skill_use_probe: false,
         auto_capture_unrecognized_critical_chance: true,
         simulate_stuck_attack_selection: true,
@@ -227,7 +189,6 @@ fn debug_settings_skill_use_probe_update_preserves_other_captures() {
 
     assert!(next.auto_capture_battle_before_attack);
     assert!(next.auto_capture_battle_result_loot);
-    assert!(next.auto_capture_unknown_screen_timeout);
     assert!(next.auto_capture_skill_use_probe);
     assert!(next.auto_capture_unrecognized_critical_chance);
     assert!(next.simulate_stuck_attack_selection);
@@ -240,7 +201,6 @@ fn debug_settings_critical_capture_update_preserves_other_debug_settings() {
         sequence_recognition_debug_mode: ImageRecognitionDebugMode::Disabled,
         auto_capture_battle_before_attack: true,
         auto_capture_battle_result_loot: true,
-        auto_capture_unknown_screen_timeout: true,
         auto_capture_skill_use_probe: true,
         auto_capture_unrecognized_critical_chance: false,
         simulate_stuck_attack_selection: true,
@@ -250,7 +210,6 @@ fn debug_settings_critical_capture_update_preserves_other_debug_settings() {
 
     assert!(next.auto_capture_battle_before_attack);
     assert!(next.auto_capture_battle_result_loot);
-    assert!(next.auto_capture_unknown_screen_timeout);
     assert!(next.auto_capture_skill_use_probe);
     assert!(next.auto_capture_unrecognized_critical_chance);
     assert!(next.simulate_stuck_attack_selection);
@@ -263,7 +222,6 @@ fn debug_settings_pre_attack_capture_update_preserves_other_debug_settings() {
         sequence_recognition_debug_mode: ImageRecognitionDebugMode::Disabled,
         auto_capture_battle_before_attack: false,
         auto_capture_battle_result_loot: true,
-        auto_capture_unknown_screen_timeout: true,
         auto_capture_skill_use_probe: true,
         auto_capture_unrecognized_critical_chance: true,
         simulate_stuck_attack_selection: true,
@@ -273,7 +231,6 @@ fn debug_settings_pre_attack_capture_update_preserves_other_debug_settings() {
 
     assert!(next.auto_capture_battle_before_attack);
     assert!(next.auto_capture_battle_result_loot);
-    assert!(next.auto_capture_unknown_screen_timeout);
     assert!(next.auto_capture_skill_use_probe);
     assert!(next.auto_capture_unrecognized_critical_chance);
     assert!(next.simulate_stuck_attack_selection);
@@ -286,7 +243,6 @@ fn image_recognition_mode_update_preserves_other_debug_settings() {
         sequence_recognition_debug_mode: ImageRecognitionDebugMode::Shadow,
         auto_capture_battle_before_attack: true,
         auto_capture_battle_result_loot: true,
-        auto_capture_unknown_screen_timeout: true,
         auto_capture_skill_use_probe: true,
         auto_capture_unrecognized_critical_chance: true,
         simulate_stuck_attack_selection: true,
@@ -307,7 +263,6 @@ fn image_recognition_mode_update_preserves_other_debug_settings() {
     );
     assert!(next.auto_capture_battle_before_attack);
     assert!(next.auto_capture_battle_result_loot);
-    assert!(next.auto_capture_unknown_screen_timeout);
     assert!(next.auto_capture_skill_use_probe);
     assert!(next.auto_capture_unrecognized_critical_chance);
     assert!(next.simulate_stuck_attack_selection);
@@ -362,4 +317,18 @@ fn debug_settings_stuck_attack_test_stays_enabled_when_persistence_fails() {
 
     assert_eq!(result.unwrap_err(), "write failed");
     assert!(state.lock().unwrap().simulate_stuck_attack_selection);
+}
+
+#[test]
+fn removed_unknown_timeout_capture_preference_is_ignored_for_legacy_settings() {
+    for legacy in [false, true] {
+        let settings: DebugSettings = serde_json::from_value(serde_json::json!({
+            "autoCaptureUnknownScreenTimeout": legacy,
+            "autoCaptureBattleResultLoot": true
+        }))
+        .unwrap();
+        let serialized = serde_json::to_value(settings).unwrap();
+        assert!(serialized.get("autoCaptureUnknownScreenTimeout").is_none());
+        assert!(settings.auto_capture_battle_result_loot);
+    }
 }
