@@ -94,7 +94,11 @@ def smoke_fixture(tmp_path):
     return executable, code, models
 
 
-def test_smoke_uses_packaged_code_and_validates_unicode_io_and_ocr(release, tmp_path, monkeypatch):
+@pytest.mark.parametrize("ping", [
+    {"id": 1, "ok": True},
+    {"id": 1, "ok": True, "recognitionDiagnosticsVersion": 1},
+])
+def test_smoke_uses_packaged_code_and_validates_unicode_io_and_ocr(release, tmp_path, monkeypatch, ping):
     executable, code, models = smoke_fixture(tmp_path)
     monkeypatch.setenv("PYTHONPATH", "ambient-source")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "release-secret")
@@ -109,10 +113,33 @@ def test_smoke_uses_packaged_code_and_validates_unicode_io_and_ocr(release, tmp_
         commands = [json.loads(line) for line in kwargs["input"].decode("utf-8").splitlines()]
         assert "中文" in commands[1]["dir"]
         assert Path(commands[2]["imagePath"]).read_bytes().startswith(b"\x89PNG")
-        return SimpleNamespace(returncode=0, stderr=b"", stdout=b'{"id":1,"ok":true}\n{"id":2,"count":1}\n{"id":3,"fragments":[]}\n')
+        replies = [ping, {"id": 2, "ok": True, "count": 1},
+                   {"id": 3, "fragments": [], "fullText": ""}]
+        return SimpleNamespace(returncode=0, stderr=b"",
+                               stdout="".join(json.dumps(reply) + "\n" for reply in replies).encode("utf-8"))
 
     monkeypatch.setattr(release.subprocess, "run", run)
     release.smoke(executable, code, models, tmp_path)
+
+
+@pytest.mark.parametrize("ping", [
+    None,
+    {"id": 99, "ok": True},
+    {"id": 1},
+    {"id": 1, "ok": False},
+    {"id": 1, "ok": 1},
+    {"id": 1, "ok": True, "error": "Ping failed"},
+])
+def test_smoke_rejects_missing_or_unsuccessful_ping(release, tmp_path, monkeypatch, ping):
+    executable, code, models = smoke_fixture(tmp_path)
+    replies = [{"id": 2, "ok": True, "count": 1}, {"id": 3, "fragments": []}]
+    if ping is not None:
+        replies.insert(0, ping)
+    result = SimpleNamespace(returncode=0, stderr=b"",
+                             stdout="".join(json.dumps(reply) + "\n" for reply in replies).encode("utf-8"))
+    monkeypatch.setattr(release.subprocess, "run", lambda *args, **kwargs: result)
+    with pytest.raises(RuntimeError, match="Frozen CV protocol/OCR check failed"):
+        release.smoke(executable, code, models, tmp_path)
 
 
 @pytest.mark.parametrize("result", [
