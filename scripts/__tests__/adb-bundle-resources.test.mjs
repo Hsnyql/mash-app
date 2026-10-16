@@ -26,22 +26,28 @@ test("common resources preserve their installed paths and exclude ADB", async ()
 });
 
 for (const [platform, expected] of [
-  ["macos", ["adb"]],
-  ["windows", ["adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll", "NOTICE.txt"]],
+  ["macos", { "resources/adb/adb": "resources/adb/adb" }],
+  ["windows", Object.fromEntries(["adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll", "NOTICE.txt"].map(name =>
+    [`resources/adb/${name}`, `resources/adb/${name}`]))],
+  ["linux", {
+    "resources/adb/linux/adb": "resources/adb/adb",
+    "resources/adb/linux/lib64/libc++.so": "resources/adb/lib64/libc++.so",
+    "resources/adb/linux/NOTICE.txt": "resources/adb/NOTICE.txt",
+  }],
 ]) {
   test(`${platform} bundles only its own ADB files alongside shared resources`, async () => {
     const common = resourceMap((await config("tauri.conf.json")).bundle.resources);
     const native = resourceMap((await config(`tauri.${platform}.conf.json`)).bundle.resources);
     // Tauri uses JSON Merge Patch: object keys merge, whereas arrays replace.
     const merged = { ...common, ...native };
-    assert.deepEqual(Object.keys(native).sort(), expected.map(name => `resources/adb/${name}`).sort());
+    assert.deepEqual(Object.keys(native).sort(), Object.keys(expected).sort());
     assert.deepEqual(Object.keys(merged).filter(name => name.startsWith("resources/adb/")).sort(),
       Object.keys(native).sort());
     for (const [source, destination] of Object.entries(common)) {
       assert.equal(merged[source], destination, `Platform override changed shared resource: ${source}`);
     }
     for (const [source, destination] of Object.entries(native)) {
-      assert.equal(destination, source);
+      assert.equal(destination, expected[source]);
       assert.ok((await readFile(new URL(`../../src-tauri/${source}`, import.meta.url))).length > 0);
     }
   });

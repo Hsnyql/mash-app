@@ -11,6 +11,9 @@ export function selectUpdaterArtifact(bundleDir, config, target, requireSignatur
   } else if (target === "darwin-aarch64" || target === "darwin-x86_64") {
     // Tauri overwrites this native app archive on each successful macOS build.
     relative = path.join("macos", `${config.productName}.app.tar.gz`);
+  } else if (target === "linux-x86_64") {
+    // Tauri signs the AppImage itself; the signature is stored next to it.
+    relative = path.join("appimage", `${config.productName}_${config.version}_amd64.AppImage`);
   } else {
     throw new Error(`Unsupported updater target: ${target}`);
   }

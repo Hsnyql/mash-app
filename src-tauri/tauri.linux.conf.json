@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": [
+      "appimage",
+      "deb"
+    ],
+    "resources": {
+      "resources/adb/linux/adb": "resources/adb/adb",
+      "resources/adb/linux/lib64/libc++.so": "resources/adb/lib64/libc++.so",
+      "resources/adb/linux/NOTICE.txt": "resources/adb/NOTICE.txt"
+    }
+  }
+}

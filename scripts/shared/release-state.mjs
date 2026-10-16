@@ -22,7 +22,7 @@ function replaceValue(text, section, key, value, allowNew = false) {
     : `${body.trimEnd()}\n${key} = "${value}"\n`));
 }
 function validatePlatform(platform) {
-  if (!/^(windows|darwin)-(x86_64|aarch64)$/.test(platform)) throw new Error("Invalid platform");
+  if (!/^(windows|darwin|linux)-(x86_64|aarch64)$/.test(platform)) throw new Error("Invalid platform");
 }
 export function readVersions(platform) {
   if (platform) validatePlatform(platform);
@@ -90,6 +90,7 @@ export function finalizeChangelog(version, date) {
 }
 export const runtimePaths = ["sidecar/mash_cv/pyproject.toml", "sidecar/mash_cv/poetry.lock",
   "sidecar/mash_cv/build_sidecar.py", "scripts/macos/build-cv.sh", "scripts/windows/build-cv.ps1",
+  "scripts/linux/build-cv.sh", "scripts/linux/prepare-linux-adb.sh",
   "src-tauri/resources/scrcpy"];
 export function hasChangesSince(ref, paths) {
   return Boolean(ref && git("diff", "--name-only", `${ref}..HEAD`, "--", ...paths));
@@ -98,7 +99,7 @@ export function releasePlan(app, code, runtime, platform, publish = false) {
   validateVersion(app);
   if (code) validateVersion(code);
   if (runtime) validateVersion(runtime);
-  if (!/^windows-(x86_64|aarch64)$/.test(platform)) throw new Error("Unsupported Windows platform");
+  validatePlatform(platform);
   const current = readVersions(platform);
   const latestTag = pattern => git("for-each-ref", "--count=1", "--sort=-version:refname", "--format=%(refname:strip=2)", `refs/tags/${pattern}`);
   const appTag = `v${app}`;

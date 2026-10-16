@@ -83,7 +83,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [ubuntu-22.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -93,6 +93,18 @@ jobs:
         with:
           workspaces: src-tauri -> target
           shared-key: native-tests-${{ runner.os }}-${{ runner.arch }}
+      - name: Install Linux Rust test dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            librsvg2-dev
       - name: Prepare Windows ADB resources
         if: runner.os == 'Windows'
         shell: pwsh
@@ -100,6 +112,52 @@ jobs:
       - name: Backend tests
         shell: bash
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+  linux-bundle:
+    name: Linux bundle
+    needs: [changes, test, scripts]
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            file \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            librsvg2-dev \
+            patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Set up pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.32.0 --activate
+      - run: pnpm install --frozen-lockfile
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: linux-bundle-${{ runner.arch }}
+      - name: Prepare Linux ADB resources
+        run: ./scripts/linux/prepare-linux-adb.sh
+      - name: Build AppImage and DEB
+        run: pnpm build:linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mash-linux-x64
+          path: |
+            src-tauri/target/release/bundle/appimage/*
+            src-tauri/target/release/bundle/deb/*
+          if-no-files-found: error
 
   scripts:
     name: Release scripts (${{ matrix.os }})
@@ -156,7 +214,7 @@ jobs:
   result:
     name: Rust result
     if: always()
-    needs: [changes, test, scripts, installer]
+    needs: [changes, test, scripts, installer, linux-bundle]
     runs-on: ubuntu-latest
     steps:
       - name: Check selected jobs
@@ -169,9 +227,12 @@ jobs:
           SCRIPTS_EXPECTED: ${{ needs.changes.outputs.scripts == 'true' && 'success' || 'skipped' }}
           INSTALLER_RESULT: ${{ needs.installer.result }}
           INSTALLER_EXPECTED: ${{ github.event_name == 'workflow_dispatch' && inputs.build_installer && 'success' || 'skipped' }}
+          LINUX_BUNDLE_RESULT: ${{ needs['linux-bundle'].result }}
+          LINUX_BUNDLE_EXPECTED: ${{ needs.changes.outputs.rust == 'true' && 'success' || 'skipped' }}
         run: |
           set -x
           test "$CHANGES_RESULT" = success
           test "$TEST_RESULT" = "$TEST_EXPECTED"
           test "$SCRIPTS_RESULT" = "$SCRIPTS_EXPECTED"
           test "$INSTALLER_RESULT" = "$INSTALLER_EXPECTED"
+          test "$LINUX_BUNDLE_RESULT" = "$LINUX_BUNDLE_EXPECTED"

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { applyCvArtifact, readVersions, updateVersion, validateVersion } from "./release-state.mjs";
 import { compareVersions } from "./updater-manifest.mjs";
 
-export const platforms = ["windows-x86_64", "darwin-aarch64"];
+export const platforms = ["windows-x86_64", "darwin-aarch64", "linux-x86_64"];
 const manifestPath = "src-tauri/resources/runtime-manifest.json";
 const json = file => JSON.parse(fs.readFileSync(file, "utf8"));
 const write = (file, value) => fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);

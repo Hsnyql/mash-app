@@ -18,7 +18,7 @@
 
 ### 系统要求
 
-- Windows 或 macOS (M 系列芯片)
+- Windows、macOS (M 系列芯片) 或 Linux x86_64（首版验证 Ubuntu 22.04/24.04、Debian 12）
 - Android 模拟器
 - ADB（Android Debug Bridge）
 
@@ -135,7 +135,15 @@ Windows：
 ./scripts/windows/build-cv.ps1
 ```
 
+Linux x86_64：
+
+```bash
+bash scripts/linux/build-cv.sh
+pnpm build:linux
+```
+
 有关 Windows 构建环境、安装包及签名的详细说明，请参阅 [Windows 构建文档](docs/windows.md)。
+Linux 构建环境、ADB 和安装包说明请参阅 [Linux 构建文档](docs/linux.md)。
 
 ### 测试
 

@@ -2530,7 +2530,42 @@ fn windows_runtime_manifest_and_installer_are_configured() {
     }
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn linux_runtime_manifest_and_bundle_are_configured() {
+    let manifest = parse_runtime_manifest(RUNTIME_MANIFEST_JSON).unwrap();
+    let artifact = manifest.platforms.get("linux-x86_64").unwrap();
+    assert!(artifact
+        .runtime_url
+        .starts_with("https://mash.xiaotongx.com/"));
+    assert!(artifact
+        .code_url
+        .contains(&format!("v{}.zip", manifest.mash_cv_code_version)));
+    for digest in [&artifact.runtime_sha256, &artifact.code_sha256] {
+        assert_eq!(digest.len(), 64);
+        assert!(digest.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(digest, &"0".repeat(64));
+    }
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let config: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(root.join("tauri.linux.conf.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        config["bundle"]["targets"],
+        serde_json::json!(["appimage", "deb"])
+    );
+    for path in [
+        "resources/adb/linux/adb",
+        "resources/adb/linux/lib64/libc++.so",
+    ] {
+        let contents = fs::read(root.join(path)).unwrap();
+        assert!(
+            contents.starts_with(b"\x7fELF"),
+            "invalid Linux binary: {path}"
+        );
+    }
+}
+
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 #[test]
 #[ignore = "requires locally built native CV ZIPs; run explicitly in CV CI"]
 fn locally_built_platform_bundles_install_and_report_ready() {

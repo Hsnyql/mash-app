@@ -46,6 +46,7 @@ jobs:
               - 'src-tauri/resources/scrcpy/**'
               - 'src-tauri/resources/runtime-manifest.json'
               - 'scripts/{macos,windows}/build-cv.{sh,ps1}'
+              - 'scripts/linux/build-cv.sh'
               - 'scripts/shared/cv-code-release.mjs'
               - 'scripts/windows/common.ps1'
               - '.github/workflows/cv.yml'
@@ -62,6 +63,7 @@ jobs:
               - 'src-tauri/resources/scrcpy/**'
               - 'src-tauri/resources/runtime-manifest.json'
               - 'scripts/{macos,windows}/build-cv.{sh,ps1}'
+              - 'scripts/linux/build-cv.sh'
               - 'scripts/shared/cv-code-release.mjs'
               - 'scripts/windows/common.ps1'
               - '.github/workflows/cv.yml'
@@ -91,7 +93,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [ubuntu-22.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
@@ -170,10 +172,67 @@ jobs:
           path: sidecar/mash_cv/dist/*.zip
           if-no-files-found: error
 
+  linux-runtime:
+    name: Linux CV package and integration
+    needs: [changes, test]
+    if: needs.changes.outputs.cvBuild == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: sidecar/mash_cv/poetry.lock
+      - name: Install Poetry
+        run: python -m pip install poetry==2.2.1
+      - uses: actions/cache@v4
+        with:
+          path: sidecar/mash_cv/.venv
+          key: cv-venv-v1-${{ runner.os }}-${{ runner.arch }}-py${{ steps.python.outputs.python-version }}-poetry2.2.1-${{ hashFiles('sidecar/mash_cv/poetry.lock', 'sidecar/mash_cv/pyproject.toml') }}
+      - name: Install CV dependencies
+        working-directory: sidecar/mash_cv
+        run: poetry install --no-root
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          shared-key: cv-linux-runtime-${{ runner.arch }}
+      - name: Build Linux CV artifacts
+        run: ./scripts/linux/build-cv.sh
+      - name: Frozen runtime smoke tests
+        working-directory: sidecar/mash_cv
+        run: poetry run pytest tests/test_linux_runtime.py
+      - name: Install Linux Rust test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            librsvg2-dev
+      - name: Prepare Linux ADB resources
+        run: ./scripts/linux/prepare-linux-adb.sh
+      - name: Install locally built CV ZIPs through the Rust backend
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib tests::locally_built_platform_bundles_install_and_report_ready -- --ignored --exact
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mash-cv-linux-x64
+          path: sidecar/mash_cv/dist/*.zip
+          if-no-files-found: error
+
   result:
     name: CV result
     if: always()
-    needs: [changes, test, runtime]
+    needs: [changes, test, runtime, linux-runtime]
     runs-on: ubuntu-latest
     steps:
       - name: Check selected jobs
@@ -184,8 +243,11 @@ jobs:
           TEST_EXPECTED: ${{ needs.changes.outputs.cv == 'true' && 'success' || 'skipped' }}
           RUNTIME_RESULT: ${{ needs.runtime.result }}
           RUNTIME_EXPECTED: ${{ needs.changes.outputs.cvBuild == 'true' && 'success' || 'skipped' }}
+          LINUX_RUNTIME_RESULT: ${{ needs['linux-runtime'].result }}
+          LINUX_RUNTIME_EXPECTED: ${{ needs.changes.outputs.cvBuild == 'true' && 'success' || 'skipped' }}
         run: |
           set -x
           test "$CHANGES_RESULT" = success
           test "$TEST_RESULT" = "$TEST_EXPECTED"
           test "$RUNTIME_RESULT" = "$RUNTIME_EXPECTED"
+          test "$LINUX_RUNTIME_RESULT" = "$LINUX_RUNTIME_EXPECTED"

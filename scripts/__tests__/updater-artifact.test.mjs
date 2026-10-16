@@ -35,8 +35,13 @@ test("Windows selects the current version and architecture with old signatures r
   const x64 = write(root, "nsis/Mash_0.14.0_x64-setup.exe");
   write(root, "msi/Mash_0.14.0_x64.msi");
   write(root, "macos/Mash.app.tar.gz");
+  write(root, "appimage/Mash_0.14.0_amd64.AppImage");
   assert.equal(selectUpdaterArtifact(root, config, "windows-x86_64"), x64);
   assert.equal(selectUpdaterArtifact(root, config, "windows-aarch64"), arm);
+  assert.equal(
+    selectUpdaterArtifact(root, config, "linux-x86_64"),
+    path.join(root, "appimage/Mash_0.14.0_amd64.AppImage"),
+  );
 });
 
 test("macOS selects its native app archive despite Windows and previous product bundles", t => {
@@ -55,7 +60,10 @@ test("missing current artifact or signature never falls back to an older release
   assert.throws(() => selectUpdaterArtifact(root, config, "windows-x86_64"), /0\.14\.0_x64-setup\.exe/);
   write(root, "nsis/Mash_0.14.0_x64-setup.exe", false);
   assert.throws(() => selectUpdaterArtifact(root, config, "windows-x86_64"), /setup\.exe\.sig/);
-  assert.throws(() => selectUpdaterArtifact(root, config, "linux-x86_64"), /Unsupported/);
+  assert.throws(
+    () => selectUpdaterArtifact(root, config, "linux-x86_64"),
+    /0\.14\.0_amd64\.AppImage/,
+  );
 });
 
 test("unsigned installer selection still requires the current native bundle", t => {

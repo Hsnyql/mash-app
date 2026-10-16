@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:scripts": "node --test scripts/__tests__/*.test.mjs",
+    "build:linux": "bash scripts/linux/build-linux.sh",
     "build:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/build-windows.ps1",
     "release:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/release.ps1"
   },

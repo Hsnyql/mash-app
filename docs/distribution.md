@@ -17,6 +17,9 @@ mash/
         windows-x86_64/
           Mash_0.2.2_x64-setup.exe
           Mash_0.2.2_x64-setup.exe.sig
+        linux-x86_64/
+          Mash_0.2.2_amd64.AppImage
+          Mash_0.2.2_amd64.AppImage.sig
         latest.json
     stable/
       latest.json
@@ -38,6 +41,8 @@ mash/
           mash-cv-runtime-darwin-aarch64-v0.2.2.zip
         windows-x86_64/
           mash-cv-runtime-windows-x86_64-v0.2.2.zip
+        linux-x86_64/
+          mash-cv-runtime-linux-x86_64-v0.1.0.zip
 ```
 
 在 `s3://mash/mash/...` 中，第一个 `mash` 是 bucket 名，第二个 `mash` 是 object prefix。
@@ -56,6 +61,7 @@ code = "0.2.2"
 [mash_cv.runtime]
 darwin-aarch64 = "0.2.2"
 windows-x86_64 = "0.1.0"
+linux-x86_64 = "0.1.0"
 ```
 
 Runtime 按操作系统和 CPU 架构独立维护版本；发布某个平台只更新该平台的版本、URL 和 SHA-256。CV code 继续共用一个版本。现有 macOS runtime 保留历史版本号 `2026.05.08-runtime1`，后续新发布版本使用 `x.x.x` 格式。tag 约定：
@@ -66,7 +72,7 @@ Runtime 按操作系统和 CPU 架构独立维护版本；发布某个平台只�
 
 ## 完整发布编排
 
-平台脚本位于 `scripts/macos/` 与 `scripts/windows/`；跨平台 Node 工具位于
+平台脚本位于 `scripts/macos/`、`scripts/windows/` 与 `scripts/linux/`；跨平台 Node 工具位于
 `scripts/shared/`。`pnpm templates:diff` 和 `pnpm test:scripts` 已引用新路径。
 以下 Bash 示例用于 macOS，Windows 原生 PowerShell 完整流程见
 [Windows 构建与发布](windows.md)。
@@ -103,7 +109,7 @@ Windows 对应入口：
 ./scripts/windows/release.ps1 0.16.0 -CvCode 0.4.27 -CvRuntime 0.3.0 -Installer -Push -Publish
 ```
 
-Windows 的 `-Installer` 发布 NSIS `.exe`；macOS 的 `--dmg` 发布 DMG。
+Windows 的 `-Installer` 发布 NSIS `.exe`；macOS 的 `--dmg` 发布 DMG；Linux 发布 AppImage 和 DEB。
 Windows 编排在新版本检测到 CV 改动时要求显式版本号；对同一 `vX.Y.Z` tag
 补发 Windows 时不修改日志、版本或 CV 清单，直接合并同版本 updater 平台。
 
@@ -112,7 +118,7 @@ Windows 编排在新版本检测到 CV 改动时要求显式版本号；对同�
 Windows x64 的原生构建和 PowerShell 发布入口见 [Windows 构建与验证](windows.md)。
 跨平台 updater 必须串行发布，并合并同一版本的 `platforms` 条目。
 
-应用通过 Tauri updater 分发；客户端仅读取 channel manifest：
+应用通过 Tauri updater 分发；客户端仅读取 channel manifest。Linux 使用 AppImage updater artifact，DEB 作为手动安装包：
 
 ```text
 https://mash.xiaotongx.com/mash/releases/stable/latest.json

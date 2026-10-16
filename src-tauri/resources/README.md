@@ -3,9 +3,10 @@
 These files ship with the app (declared in `tauri.conf.json` and platform configs → `bundle.resources`) and are resolved at runtime via `app.path().resolve("resources/...", BaseDirectory::Resource)`.
 
 Resource maps preserve installed paths while allowing Tauri to merge common and
-platform entries. ADB is listed only in `tauri.macos.conf.json` (`adb`) or
-`tauri.windows.conf.json` (`adb.exe`, its two DLLs, and `NOTICE.txt`). Do not add
-`resources/adb/*` to the common config: it bundles both platforms' binaries.
+platform entries. ADB is listed only in the platform config: macOS uses `adb`,
+Windows uses `adb.exe` plus its two DLLs, and Linux uses the pinned
+`resources/adb/linux/adb` with `lib64/libc++.so`. Do not add `resources/adb/*`
+to the common config: it would bundle every platform's binaries.
 
 ## Layout
 
