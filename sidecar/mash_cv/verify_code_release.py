@@ -120,7 +120,9 @@ def smoke(executable: Path, code: Path, models: Path, work: Path) -> None:
         raise RuntimeError(f"Frozen CV failed: {result.stderr.decode('utf-8', errors='replace')}")
     replies = {reply.get("id"): reply for line in result.stdout.decode("utf-8").splitlines()
                if line for reply in [json.loads(line)]}
-    if (replies.get(1) != {"id": 1, "ok": True} or replies.get(2, {}).get("count") != 1
+    # Ping may include capability metadata in addition to the required success flag.
+    if (replies.get(1, {}).get("ok") is not True or "error" in replies.get(1, {})
+            or replies.get(2, {}).get("count") != 1
             or "error" in replies.get(3, {}) or replies.get(3, {}).get("fragments") != []):
         raise RuntimeError(f"Frozen CV protocol/OCR check failed: {replies}")
 
