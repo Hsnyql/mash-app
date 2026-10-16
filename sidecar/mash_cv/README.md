@@ -1,198 +1,110 @@
 # mash-cv
 
-`mash-cv` is an OpenCV-based screen detection sidecar for `mash`.
-
-It runs as a long-lived process that reads JSON commands from `stdin` and writes JSON responses to `stdout` (one JSON object per line).
-
-## Requirements
-
-- Python 3.11+
-- Poetry
+OpenCV / OCR sidecar for Mash, including scrcpy video decoding through PyAV. It runs as a persistent process and exchanges one JSON object per line with the Rust backend over stdin/stdout.
 
 ## Setup
 
-```bash
-# Install Poetry if needed
-pipx install poetry
+Requires Python 3.11–3.14 and Poetry. CI uses Python 3.12. Run these commands from `sidecar/mash_cv/`:
 
-# Install project dependencies
+```bash
 poetry install
-```
-
-## Project layout
-
-```text
-mash_cv/
-  mash_cv/
-    __main__.py     # module entrypoint (python -m mash_cv)
-    cv.py           # protocol loop + CV implementation
-    run_tests.py    # script helpers
-  tests/
-    test_cv.py
-    test_integration.py
-  build_sidecar.py
-```
-
-## Run
-
-```bash
-# Start sidecar process
 poetry run python -m mash_cv
-
-# Equivalent Poetry script entrypoint
-poetry run run
 ```
 
-## JSON-line protocol
+The Tauri development build reads Python source from this directory, using the installed CV runtime and OCR models.
+
+## Layout
+
+| Path | Purpose |
+| --- | --- |
+| `mash_cv/cv.py` | Command loop and recognition |
+| `mash_cv/stream.py` | scrcpy / PyAV video pipeline |
+| `mash_cv/host/` | OS-specific I/O and process handling |
+| `mash_cv/region_tool.py` | Template-region CLI |
+| `tests/` | Offline tests and fixtures |
+| `build_sidecar.py` | Shared runtime and code ZIP builder |
+| `training/` | Digit classifier training and labeling tools |
+
+## Protocol
+
+Requests include a `cmd` and may include an `id`, which is echoed in responses. The Rust client uses IDs to discard stale replies. Keep stdout for protocol output and write diagnostics to stderr.
+
+Example request and response:
 
 ```text
-→ {"cmd":"load_templates","dir":"/path/to/templates"}
-← {"ok":true,"count":3}
-
-→ {"cmd":"detect","imagePath":"/tmp/ss.png"}
-← {"screen":"TeamConfirm"}
-
-→ {"cmd":"find_element","imagePath":"/tmp/ss.png","templateKey":"servant_123",
-    "region":{"x":0.0,"y":0.1,"w":1.0,"h":0.85},"threshold":0.8}
-← {"found":true,"x":0.45,"y":0.32}
-
-→ {"cmd":"find_region","imagePath":"/tmp/ss.png","templatePath":"/tmp/button.png","threshold":0.8}
-← {"found":true,"x":0.45,"y":0.32,"score":0.97,
-    "region":{"x":0.42,"y":0.30,"w":0.06,"h":0.04}}
-
-→ {"cmd":"read_battle_scene","imagePath":"/tmp/ss.png",
-    "region":{"x":0.587,"y":0.0,"w":0.16,"h":0.062}}
-← {"scene":1,"total":3}
-  // both null when the BATTLE label anchor misses (e.g. NP overlay)
-  // or fewer than two digits clear the threshold; add "debug":true to
-  // the request for a "diagnostics" object with anchor score, every
-  // candidate/kept digit, the chosen split + best gap, and a
-  // failReason enum.
-
-→ {"cmd":"quit"}
-(process exits)
+→ {"id":1,"cmd":"ping"}
+← {"id":1,"ok":true,"recognitionDiagnosticsVersion":1}
 ```
 
-Supported commands:
+Common commands:
 
-- `load_templates`: recursively load `.png` files from `dir` into in-memory template map keyed by filename (without extension).
-- `detect`: classify screenshot as known screen or `Unknown`.
-- `find_element`: template-match within normalized `region` (`x`, `y`, `w`, `h` in `[0, 1]`) and return normalized center coordinate when found.
-- `find_region`: template-match with direct `templatePath` and return normalized center point + normalized bounding region.
-- `read_battle_scene`: OCR the `BATTLE m/n` HUD strip in the top-right of the battle screen. Anchors on the gold `BATTLE` label (`text_battle_label` template), template-matches `digit_0` .. `digit_9` to its right, runs greedy x-NMS, and splits the kept detections into `(scene, total)` by the single largest x-gap (the slash). Returns `{"scene":m,"total":n}` or `{"scene":null,"total":null}`. Pass `"debug":true` to also receive a diagnostics payload describing every intermediate decision.
-- `quit`: stop the process.
+| Command | Purpose |
+| --- | --- |
+| `load_templates` | Load PNGs from `dir`; `append` preserves existing templates and `keyPrefix` adds a namespace |
+| `load_config` | Read `cv.json` from `path`; `merge` deep-merges it into the current config |
+| `set_server` | Select the game server |
+| `start_stream` / `stop_stream` | Manage the device video stream |
+| `detect` | Classify the current frame or `imagePath` |
+| `find_element` | Match `templateKey` in a normalized `region` |
+| `find_element_by_name` | Look up an element by `screen` and `element` |
+| `find_region` | Match a template loaded from `templatePath` |
+| `read_battle_scene` | Read the battle counter; `debug: true` adds diagnostics |
+| `find_noble_phantasms` | Read NP readiness |
+| `quit` | Stop the process |
 
-## Region CLI tool
+Regions use normalized `x`, `y`, `w`, `h` coordinates in `[0, 1]`. Template keys preserve the relative path without `.png`, for example `battle/button_attack` or `shared/screen_team_party`.
 
-Input is `screenshot` + `template`; output is JSON with:
-- `region` / `originalRegion`: matched box
-- `paddedRoi`: expanded ROI around the match (for reuse in next detection)
-- `found`, `score`, `x`, `y`
+Command handling lives in [cv.py](mash_cv/cv.py), with Rust request types and wrappers in [screen/](../../src-tauri/src/screen/). See [CV resources](../../src-tauri/resources/README.md), [battle-scene detection](../../docs/battle-scene-detection.md), and [NP readiness](../../docs/np-readiness-detection.md) for configuration and detection details.
+
+## Region CLI
 
 ```bash
-poetry run region \
-  --screenshot tests/test_data/screenshots/team_confirm.png \
-  --template tests/test_data/templates/mission_start_button.png \
-  --padding 0.02 \
-  --threshold 0.8
+poetry run region --screenshot /path/to/screenshot.png --template /path/to/template.png --padding 0.02 --threshold 0.8
 ```
 
-Example output:
-
-```json
-{"found":true,"x":0.83,"y":0.92,"score":0.96,"region":{"x":0.77,"y":0.90,"w":0.12,"h":0.05},"originalRegion":{"x":0.77,"y":0.90,"w":0.12,"h":0.05},"paddedRoi":{"x":0.75,"y":0.88,"w":0.16,"h":0.09}}
-```
-
-Padding options:
-- `--padding`: uniform X/Y padding (default `0.02`)
-- `--padding-x` and `--padding-y`: axis-specific override
+Outputs JSON with `found`, `score`, the normalized center `x` / `y`, matched `region` / `originalRegion`, and expanded `paddedRoi`. Use `--padding-x` and `--padding-y` to override padding per axis.
 
 ## Tests
 
 ```bash
-# Unit tests
-poetry run pytest tests/test_cv.py -v
-# or
-poetry run unit
-
-# Integration tests
-poetry run pytest tests/test_integration.py -v
-# or
-poetry run integration
-
-# All tests
-poetry run pytest -v
+poetry run pytest
 ```
+
+For focused runs, pass a test path such as `tests/test_cv.py`. Keep fixtures under `tests/test_data/`; routine tests need no ADB device or running stream. Tests of packaged runtimes additionally require the built artifacts.
+
+New template probes should include a 1920×1080 downscaled fixture to check resolution independence. See [sidecar conventions](AGENTS.md).
 
 ## Build
 
+Run the shared builder in the native host environment:
+
 ```bash
-# From sidecar/mash_cv/ on macOS
+poetry run python build_sidecar.py
+poetry run python build_sidecar.py --code-only
+poetry run python build_sidecar.py --runtime-only
+```
+
+Platform wrappers also install Poetry dependencies:
+
+```bash
+# macOS, from sidecar/mash_cv/
 bash ../../scripts/macos/build-cv.sh
 ```
 
-The shared `build_sidecar.py` builder reads the default runtime/code versions from the repo-root
-`versions.toml`: `[mash_cv].code` is shared, while `[mash_cv.runtime]` maps
-platform keys to independent runtime versions. Runtime builds select the native
-host's key; code-only builds do not require a runtime entry. Set
-`MASH_CV_RUNTIME_VERSION` or `MASH_CV_CODE_VERSION` only when you need a one-off
-override.
+```powershell
+# Windows, from sidecar/mash_cv/
+../../scripts/windows/build-cv.ps1
+# Or select one package
+../../scripts/windows/build-cv.ps1 -Mode code
+```
 
-By default, the build script creates two artifacts:
+Windows accepts `-Mode runtime` and `-Python <path>` for an existing environment. Outputs:
 
 ```text
 dist/mash-cv-runtime-<platform>-v<runtimeVersion>.zip
 dist/mash-cv-code-v<codeVersion>.zip
 ```
 
-You can build either side independently:
+The builder reads `versions.toml`: code has one shared version, while runtime versions are keyed by platform. One-off overrides use `MASH_CV_CODE_VERSION` and `MASH_CV_RUNTIME_VERSION`.
 
-```bash
-bash ../../scripts/macos/build-cv.sh --runtime-only
-bash ../../scripts/macos/build-cv.sh --code-only
-```
-
-On Windows, use the native PowerShell entry points from the same directory:
-
-```powershell
-../../scripts/windows/build-cv.ps1
-../../scripts/windows/build-cv.ps1 -Mode runtime
-../../scripts/windows/build-cv.ps1 -Mode code
-```
-
-Both entry points install Poetry dependencies and invoke the same builder.
-Windows also accepts `-Python <path>` to use an existing Python environment
-with the required dependencies installed. ZIP outputs stay in this sidecar's
-`dist/` directory.
-
-The runtime zip contains the PyInstaller `--onedir` launcher, native
-dependencies, and OCR models under archive root `mash-cv-runtime/`. The code
-zip contains the lightweight `mash_cv` Python package under archive root
-`mash-cv-code/`.
-
-The Tauri app installs them under:
-
-```text
-app_data_dir()/runtime/mash-cv/runtime/<runtimeVersion>/mash-cv-runtime/
-app_data_dir()/runtime/mash-cv/code/<codeVersion>/mash-cv-code/
-```
-
-After the script prints the artifact SHA-256 values, upload the changed zip to
-the release host/CDN and update `src-tauri/resources/runtime-manifest.json` with:
-
-- the affected platform's `runtimeVersion`
-- `mashCvCodeVersion`
-- each platform's `runtimeUrl` / `runtimeSha256`
-- each platform's `codeUrl` / `codeSha256`
-
-If only Python code changed, run `bash ../../scripts/macos/build-cv.sh --code-only`
-or `../../scripts/windows/build-cv.ps1 -Mode code`, bump only
-`mashCvCodeVersion`, and update only each platform's `codeUrl` / `codeSha256`.
-Keep every platform's existing runtime version, URL, and SHA unchanged.
-Publishing a runtime updates only the target platform's entry in
-`versions.toml` and the manifest.
-
-The script no longer copies the sidecar into `src-tauri/binaries/`; `mash-cv`
-is distributed independently so normal Tauri app updates do not force users to
-download the large Python/OpenCV bundle again. Python-only sidecar fixes should
-only bump and publish the code zip.
+The runtime ZIP contains the PyInstaller launcher, native dependencies and OCR models under `mash-cv-runtime/`; the code ZIP contains `mash_cv/` under `mash-cv-code/`. Python-only changes need only a code package update. Publishing and manifest updates are covered in [distribution](../../docs/distribution.md).
