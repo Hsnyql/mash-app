@@ -16,8 +16,8 @@ Lifecycle / streaming:
 → {"cmd":"set_digit_recognition_mode","mode":"disabled"|"enabled"|"shadow"}
 → {"cmd":"set_sequence_recognition_mode","mode":"disabled"|"enabled"|"shadow"}
                                                     ← {"ok":true,"mode":"shadow"}
-→ {"cmd":"start_stream","adbPath":"...","jarPath":"...","serial":"...","maxSize":1920,"bitRate":12000000,"maxFps":15}
-                                                    ← {"ok":true,"width":1080,"height":1920}
+→ {"cmd":"start_stream","adbPath":"...","jarPath":"...","serial":"...","displayId":0,"maxSize":1920,"bitRate":12000000,"maxFps":15}
+                                                    ← {"ok":true,"width":1080,"height":1920,"displayId":0}
 → {"cmd":"stop_stream"}                             ← {"ok":true,"running":false}
 → {"cmd":"release_ocr"}                             ← {"ok":true,"released":true}
 → {"cmd":"get_frame","quality":85,"waitSeconds":10} ← {"ok":true,"jpegB64":"...","width":w,"height":h}
@@ -7004,6 +7004,7 @@ def _start_stream(cmd: dict) -> dict:
     max_size = int(cmd.get("maxSize", 0))
     bit_rate = int(cmd.get("bitRate", 8_000_000))
     max_fps = int(cmd.get("maxFps", 0))
+    display_id = int(cmd.get("displayId", 0))
 
     new_stream = ScrcpyStream(
         adb_path=adb_path,
@@ -7012,6 +7013,7 @@ def _start_stream(cmd: dict) -> dict:
         max_size=max_size,
         bit_rate=bit_rate,
         max_fps=max_fps,
+        display_id=display_id,
     )
     try:
         width, height = new_stream.start()
@@ -7034,7 +7036,7 @@ def _start_stream(cmd: dict) -> dict:
         }
 
     stream = new_stream
-    return {"ok": True, "width": width, "height": height}
+    return {"ok": True, "width": width, "height": height, "displayId": display_id}
 
 
 def _stop_stream() -> dict:

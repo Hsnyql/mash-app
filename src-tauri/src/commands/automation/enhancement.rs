@@ -119,7 +119,7 @@ pub(crate) fn start_enhancement_automation(
         let _automation_lease = automation_lease;
         emit_enhancement_status(&app, &state, "", "正在连接 ADB…");
         let mut adb_dev = adb::Adb::new(&app, selected_adb_serial);
-        if let Err(err) = adb_dev.connect() {
+        if let Err(err) = adb_dev.connect_for_server(server) {
             fail_enhancement_start(&app, &state, err);
             return;
         }
@@ -127,7 +127,6 @@ pub(crate) fn start_enhancement_automation(
             stop_enhancement_start(&app, &state);
             return;
         }
-        let serial = adb_dev.serial().map(|s| s.to_string());
 
         let Some(jar_path) = resolve_scrcpy_jar(&app) else {
             fail_enhancement_start(&app, &state, "找不到 scrcpy-server.jar 资源".into());
@@ -161,9 +160,8 @@ pub(crate) fn start_enhancement_automation(
             }
         };
         let (w, h) = match sidecar.start_stream(
-            adb_dev.path(),
+            &adb_dev,
             &jar_path,
-            serial.as_deref(),
             STREAM_MAX_SIZE,
             STREAM_BIT_RATE,
             STREAM_MAX_FPS,

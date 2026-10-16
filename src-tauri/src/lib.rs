@@ -74,6 +74,7 @@ pub fn run() {
             refresh_asset_protocol_scope(app.handle())?;
             app.manage(Mutex::new(adb_device_settings));
             app.manage(Mutex::new(server));
+            app.manage(platform::MuMuLookupState::default());
             app.manage(Mutex::new(recognition_settings));
             app.manage(Mutex::new(debug_settings));
             app.manage(Mutex::new(app_ui_settings));
