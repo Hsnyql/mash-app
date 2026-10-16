@@ -1,144 +1,42 @@
 # CV Resources
 
-These files ship with the app (declared in `tauri.conf.json` and platform configs → `bundle.resources`) and are resolved at runtime via `app.path().resolve("resources/...", BaseDirectory::Resource)`.
-
-Resource maps preserve installed paths while allowing Tauri to merge common and
-platform entries. ADB is listed only in `tauri.macos.conf.json` (`adb`) or
-`tauri.windows.conf.json` (`adb.exe`, its two DLLs, and `NOTICE.txt`). Do not add
-`resources/adb/*` to the common config: it bundles both platforms' binaries.
+Bundled CV configuration, templates and device-streaming resources. Installation and release details are covered in [distribution](../../docs/distribution.md).
 
 ## Layout
 
-```
-resources/
-  runtime-manifest.json  # required mash-cv base/code versions + artifact URLs/SHA-256
-  servers/
-    shared/
-      cv.json       # server-neutral screen probes merged before JP/CN config
-      templates/    # loaded with the shared/ key prefix
-        screen_team_party.png
-        screen_support_select.png
-        screen_support_refresh_button.png
-    jp/
-      cv.json       # screen + element template mapping (see below)
-      templates/    # PNG templates, loaded by stem (filename without extension)
-        button_attack.png
-        ...
-        text_battle_label.png       # battle-scene OCR anchor (not in cv.json)
-        digit_0.png .. digit_9.png  # digit glyphs for battle-scene OCR
-    cn/
-      cv.json       # CN-localized template mapping (currently a copy of JP)
-      templates/    # CN PNG templates (placeholder; fill in once you have them)
-  scrcpy/
-    scrcpy-server.jar   # pinned scrcpy server, pushed to device for streaming
-```
-
-The sidecar loads the bundle for whichever server is currently active (set
-via the server selector in the status bar; persisted in
-`server_settings.json`). JP is the default and ships fully populated; the
-CN bundle exists so the app can boot when CN is selected, but the PNG set
-will be incomplete until CN templates are captured — `find_element` calls
-for missing templates surface a clear error rather than silently
-misdetecting.
-
-The sidecar loads `servers/shared/templates/` first, keyed with a
-`shared/` prefix, then loads the active server's `templates/` folder keyed
-by filename stem. Shared `cv.json` is loaded first and deep-merged with the
-active server's `cv.json`, so shared screen detects can combine with
-server-specific variants/elements.
-
-Every PNG under the active server's `templates/` folder is loaded by the
-sidecar on startup and keyed by its filename stem. Most are referenced by that
-server's `cv.json`, but a few (the battle-scene OCR set below) are looked
-up directly by the Rust runner.
-
-Legacy `text_turn_label.png` and `text_tan.png` files may still be present on
-disk from earlier versions; they are no longer referenced by code and can be
-safely deleted.
-
-## runtime-manifest.json
-
-`mash-cv` is distributed separately from the Tauri app bundle and split into a
-heavy runtime base plus a lightweight Python code package. The app reads
-`runtime-manifest.json` to decide which versions are required for the current
-app build and where users can download the matching zips. See
-`docs/distribution.md` for the R2 object layout and release commands.
-
-```json
-{
-  "mashCvCodeVersion": "0.2.2",
-  "platforms": {
-    "darwin-aarch64": {
-      "runtimeVersion": "0.2.2",
-      "runtimeUrl": "https://cdn.example.com/mash/runtime/mash-cv/runtime/darwin-aarch64/mash-cv-runtime-darwin-aarch64-v0.2.2.zip",
-      "runtimeSha256": "...",
-      "codeUrl": "https://cdn.example.com/mash/runtime/mash-cv/code/mash-cv-code-v0.2.2.zip",
-      "codeSha256": "..."
-    }
-  }
-}
-```
-
-Each platform has its own `runtimeVersion`, URL, and SHA-256. Publishing one
-platform does not change another platform's required runtime. The Python code
-version remains shared across platforms.
-
-Artifacts are installed manually through the app into:
-
 ```text
-app_data_dir()/runtime/mash-cv/runtime/<platform.runtimeVersion>/mash-cv-runtime/
-app_data_dir()/runtime/mash-cv/code/<mashCvCodeVersion>/mash-cv-code/
+resources/
+  runtime-manifest.json       Required CV versions, URLs and SHA-256
+  assets-manifest.json        Target image-asset version
+  servers/
+    shared/{cv.json,templates/}
+    jp/{cv.json,templates/}
+    cn/{cv.json,templates/}
+  images/                     Bundled UI images
+  scrcpy/scrcpy-server.jar     Pinned streaming server
+  adb/                        Platform-specific ADB binaries
 ```
 
-The runtime zip must use `mash-cv-runtime/` as its archive root and contain
-`mash-cv-runtime/mash-cv` on macOS/Linux or `mash-cv-runtime/mash-cv.exe` on
-Windows. The code zip must use `mash-cv-code/` as its archive root and contain
-`mash-cv-code/mash_cv/`. The app checks the zip SHA-256 against the manifest
-before installing it through a staging directory, then writes separate
-`runtime-version.json` and `code-version.json` files.
+Tauri resource maps preserve installed paths. Common resources belong in `tauri.conf.json`; ADB entries belong in `tauri.macos.conf.json` or `tauri.windows.conf.json` to avoid bundling another platform's binaries.
 
-Only change the affected platform's `runtimeVersion` when the heavy base changes: OCR models,
-PyInstaller dependencies, native dependencies, or runtime launcher/archive
-layout. Python-only sidecar source changes should only bump
-`mashCvCodeVersion`. UI/Rust-only fixes should leave both runtime versions
-unchanged so Tauri updater downloads stay small.
+## Server configuration and templates
 
-## scrcpy-server.jar
+The app loads `servers/shared/` first, then the selected JP or CN bundle. Shared `cv.json` is deep-merged with the server config. Server selection is persisted in `server_settings.json`.
 
-The `mash-cv` sidecar opens a realtime H.264 stream from the device by pushing
-this jar to `/data/local/tmp/scrcpy-server.jar` and launching it via
-`app_process`. The protocol implemented in the sidecar targets scrcpy **2.7**
-specifically; keep the jar in lockstep with the sidecar when upgrading.
+PNG keys preserve their relative path without the extension. Shared templates receive a `shared/` prefix; for example:
 
-To refresh the jar (download + verify in one shot):
+- `shared/templates/screen_team_party.png` → `shared/screen_team_party`
+- `jp/templates/battle/button_attack.png` → `battle/button_attack`
 
-```bash
-JAR=src-tauri/resources/scrcpy/scrcpy-server.jar
-EXPECTED=a23c5659f36c260f105c022d27bcb3eafffa26070e7baa9eda66d01377a1adba
-
-curl -fsSL -o "$JAR" \
-  https://github.com/Genymobile/scrcpy/releases/download/v2.7/scrcpy-server-v2.7
-
-ACTUAL=$(shasum -a 256 "$JAR" | awk '{print $1}')
-if [ "$ACTUAL" != "$EXPECTED" ]; then
-  echo "checksum mismatch: got $ACTUAL, want $EXPECTED" >&2
-  rm -f "$JAR"
-  exit 1
-fi
-echo "scrcpy-server.jar OK ($EXPECTED)"
-```
-
-Expected SHA-256 (v2.7): `a23c5659f36c260f105c022d27bcb3eafffa26070e7baa9eda66d01377a1adba`.
-
-Missing binaries are non-fatal — the runner falls back to a chained
-`adb shell input motionevent` settle swipe (slower, choppier, but
-still fling-free) so the rest of automation keeps working.
+Templates may be referenced from `cv.json` or directly by recognition code. Missing referenced templates produce an error.
 
 ## cv.json schema
 
-All coordinates are normalized (0.0..1.0) across the screenshot.
+Coordinates are normalized to the screenshot in `[0, 1]`. Screens describe base pages, variants describe alternate views of that page, and elements describe interaction targets or status probes. Each server screen defines at least `variants.main`.
 
-```jsonc
+Example of a merged screen configuration:
+
+```json
 {
   "screens": {
     "TeamConfirm": {
@@ -150,17 +48,21 @@ All coordinates are normalized (0.0..1.0) across the screenshot.
             "threshold": 0.75
           },
           {
-            "template": "button_mission_start",
+            "template": "screen_team_confirm/button_mission_start",
             "region": { "x": 0.818, "y": 0.851, "w": 0.187, "h": 0.161 },
             "threshold": 0.8
           }
         ]
       },
-      "elements": {
-        "start": {
-          "template": "team_confirm_start",
-          "region":   { "x": 0.65, "y": 0.85, "w": 0.35, "h": 0.15 },
-          "threshold": 0.8
+      "variants": {
+        "main": {
+          "elements": {
+            "mission_start": {
+              "template": "screen_team_confirm/button_mission_start",
+              "region": { "x": 0.818, "y": 0.851, "w": 0.187, "h": 0.161 },
+              "threshold": 0.8
+            }
+          }
         }
       }
     }
@@ -168,59 +70,56 @@ All coordinates are normalized (0.0..1.0) across the screenshot.
 }
 ```
 
-`detect.template` matches one template. `detect.templates` is an OR list for
-alternate skins of the same screen. `detect.requiredTemplates` is an AND list:
-all probes must match, and the screen score is the weakest matched probe.
+Detection supports a single `template`, alternative `templates` (OR), or `requiredTemplates` (AND, scored by the weakest match). Ordered `templateOptions` accept the first passing option. Matching screens are ranked by `priority`, then score; no match returns `Unknown`.
 
-## Detection logic
-
-1. For every screen in `screens`, run grayscale `TM_CCOEFF_NORMED` template matching of its `detect.template` inside `detect.region`.
-2. Keep the match whose score exceeds `detect.threshold`.
-3. The highest-scoring screen wins. If no screen matches, the current screen is `Unknown`.
-
-## Elements
-
-Elements are nested under their screen. The debug page (and runner) look them up by `(screen, element)` name, so you can rearrange / recalibrate without touching Rust code.
+Use elements for states such as dialog visibility or menu readiness. Do not add a variant merely to represent a status flag.
 
 ## Adding a template
 
-1. Crop the region of interest from a real device screenshot at the same resolution used at runtime. Save as PNG under `resources/servers/<jp|cn>/templates/` (matching the server you captured the screenshot on).
-2. Reference the basename (no extension) from that server's `cv.json`.
-3. Restart `pnpm tauri dev` — the Rust side resolves the bundled resources at startup and passes them to the installed sidecar runtime.
+1. Crop a PNG from a screenshot of the target server into `servers/<jp|cn>/templates/`. Use `shared/` for server-neutral templates.
+2. Reference the relative key in `cv.json` or the detector.
+3. Account for frame resolution when scaling templates; source PNG pixels are not runtime coordinates.
+4. Add an offline fixture and test, including a 1920×1080 downscaled case. Restart the development app to reload resources.
 
-To compare template coverage across servers and spot missing files:
+Compare template coverage, including nested directories:
 
 ```bash
 pnpm templates:diff
 pnpm templates:diff -- --check
 ```
 
-The comparison uses each file's relative path under `templates/`, so nested
-folders such as `items/` and `digit_v2/` are checked independently.
+State and probe changes also require updating the matching [automation document](../../docs/README.md#自动化与识别). Battle-counter recognition is documented in [battle-scene detection](../../docs/battle-scene-detection.md).
 
-## Battle-scene OCR templates
+## runtime-manifest.json
 
-During battle the sidecar's `read_battle_scene` command recognizes the
-current battle-scene indicator (`BATTLE m/n`) by template-matching digit
-glyphs in the strip to the right of the gold `BATTLE` label. The strip is
-anchored on the left by `text_battle_label`; everything to the right of the
-anchor (within the configured region) is searched. Kept digit detections
-are split into `(m, n)` by the single largest x-gap between adjacent
-glyphs (the slash between the two numbers).
+The app bundles the manifest and installs CV packages separately. Its fields are:
 
-The runner uses `m` (1-indexed) to pick which configured `BattleScene`
-block to execute — i.e. one config block per battle scene, not per
-in-game turn.
+| Field | Meaning |
+| --- | --- |
+| `mashCvCodeVersion` | Shared Python code version |
+| `platforms.<platform>.runtimeVersion` | Native runtime version for that platform |
+| `runtimeUrl` / `runtimeSha256` | Runtime download and checksum |
+| `codeUrl` / `codeSha256` | Code download and checksum |
 
-Required template stems (loaded by name, not via `cv.json`):
+Archive roots must be `mash-cv-runtime/` and `mash-cv-code/`. The runtime root contains `mash-cv` on macOS or `mash-cv.exe` on Windows; the code root contains the `mash_cv/` package.
 
-- `text_battle_label` — gold `BATTLE` word, left anchor.
-- `digit_0` through `digit_9` — individual digit glyphs (shared with any
-  other digit-based readers).
+Before installation the app verifies SHA-256, extracts through staging, then writes separate `runtime-version.json` and `code-version.json` records. Installed paths:
 
-Drop each as a tight, grayscale PNG under `resources/servers/<jp|cn>/templates/` (no padding,
-no extension in the filename stem). Any missing `digit_N` simply means
-scenes containing that digit currently return `null`; add the file and the
-pipeline picks it up on the next `load_templates` call — no code changes
-needed. Multi-digit values (10, 23, …) are handled automatically by the
-same greedy-NMS-on-x pass, then split-by-largest-gap into `(m, n)`.
+```text
+app_data_dir()/runtime/mash-cv/runtime/<runtimeVersion>/mash-cv-runtime/
+app_data_dir()/runtime/mash-cv/code/<mashCvCodeVersion>/mash-cv-code/
+```
+
+Change runtime versions only for native dependencies, OCR models, the launcher or archive layout. Python-only updates change the shared code version and all platforms' code URLs/checksums; other platforms' runtime fields remain unchanged.
+
+## scrcpy-server.jar
+
+The sidecar pushes this JAR to `/data/local/tmp/scrcpy-server.jar` and launches it through `app_process`. The stream protocol targets scrcpy **2.7**; update the JAR and sidecar together.
+
+The [upstream v2.7 server](https://github.com/Genymobile/scrcpy/releases/download/v2.7/scrcpy-server-v2.7) must have SHA-256:
+
+```text
+a23c5659f36c260f105c022d27bcb3eafffa26070e7baa9eda66d01377a1adba
+```
+
+Verify the checksum before replacing `scrcpy/scrcpy-server.jar`.

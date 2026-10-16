@@ -1,0 +1,53 @@
+# 自动化状态机
+
+本文约定各流程共用的生命周期、错误处理和诊断行为。各流程文档记录画面转换与执行条件：
+
+| 流程 | 区服 | 文档 |
+| --- | --- | --- |
+| 战斗 | JP / CN；强化任务仅 CN | [战斗自动化](battle-automation.md) |
+| 从者强化 | JP | [从者强化](enhancement-automation.md) |
+| 礼装强化与丸子制作 | CN | [概念礼装强化](craft-essence-enhancement-automation.md) |
+| 友情点召唤 | CN | [友情点召唤](friend-point-summon-automation.md) |
+
+各 runner 互斥使用设备。Rust 持有运行状态和计数，前端根据事件展示。
+
+## 生命周期
+
+| 当前状态 | 事件 | 下一状态 |
+| --- | --- | --- |
+| `Idle` / 终态 | 接受启动请求 | `Starting` |
+| `Starting` | worker 启动 | `Running` |
+| `Starting` / `Running` | 用户停止 | `Idle` |
+| `Running` | 完成任务 | `Finished` |
+| 任意状态 | 失败 | `Error` |
+
+启动命令在创建 worker 前设置 `Starting`；无效转换保持原状态。前端使用事件的 `status`（`idle`、`starting`、`running`、`finished`、`error`）判断生命周期，`state` 字符串仅供诊断。
+
+## 画面与模板
+
+`Screen` 是 CV 识别到的基础页面，`variant` 是同页的不同视图，`element` 表示按钮或状态探针。流程状态还包括等待加载、动作提交等事实，与画面分类分开管理；图中的动作节点不一定对应 `Screen` 枚举。
+
+配置来自 `src-tauri/resources/servers/{shared,jp,cn}/cv.json`，模板规则见 [CV 资源](../../src-tauri/resources/README.md)。任务只探测本流程需要的画面；完整的 PNG 解码、随包文件清单和配置引用检查由用户执行“自检”。
+
+- 模板分数不足：按未匹配处理，允许该流程规定的等待或恢复。
+- 模板缺失或损坏：立即进入 `Error`，停止识别与触摸，不走坐标兜底；失败的 sidecar 不再缓存。
+- 启动时模板或配置加载失败：直接报错。
+
+模板错误使用 `errorCode: template_load_failed`，附带 `templateKey` / `templatePath` 和可读说明。Python 的 `TemplateLoadError` 经 Rust `CvError::TemplateLoad`、`AutomationError::Cv` 上抛；文件 I/O 错误保留为 `AutomationError::Io`。调用方按类型或错误码处理。
+
+连续未识别的停止阈值来自“游戏 → 基础设置 → 识别超时”：默认 100 次，可设 50–1000 次，关闭限制时内部使用 9999 次。具体动作的重试次数和超时见各流程文档。
+
+## 战斗识别失败诊断
+
+每次运行重置诊断缓冲，保存实际识别输入及其帧编号、解码时间。连续 `Unknown` 最多保留中间和最后两张现场；恢复识别后释放该段现场。超时或 CV 错误时归档诊断，失败仅附加警告，不覆盖原始任务错误。
+
+- 记录候选分数、阈值、搜索框、匹配框、缩放尺寸和跳过原因；不可计算的分数为 `null`。
+- 无法取得现场时标明证据缺失，不重新截图替代原识别输入。
+- 后端最多保留 10 次、合计 200 MiB；日志缓冲最多 2,000 条、2 MiB，不受前端“显示调试”影响。
+- 停止后可从操作日志预览、补充问题描述、导出 ZIP 或删除记录，重启后仍可读取。
+- 导出包含校验清单、配置与模板、环境、匹配结果、现场 PNG 和脱敏日志；问题描述在导出操作时保存，取消文件保存也保留。取消导出不报错。
+- 删除需二次确认，由后端与归档、导出共用锁，完成后重新读取记录。
+
+## 维护
+
+状态、路由、模板探针或停止条件变化时，同步修改对应文档并运行所属层测试。普通操作日志使用 `info`，匹配细节等排障信息使用 `debug`；前端默认隐藏 debug。
