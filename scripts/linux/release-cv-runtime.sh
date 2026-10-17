@@ -38,7 +38,7 @@ export MASH_CV_RUNTIME_VERSION="$VERSION"
 "$SCRIPT_DIR/build-cv.sh" --runtime-only
 
 ARTIFACT="mash-cv-runtime-$PLATFORM-v$VERSION.zip"
-DIST_PATH="$REPO_ROOT/sidecar/mash_cv/dist/$ARTIFACT"
+DIST_PATH="$REPO_ROOT/sidecar/cv-runtime/dist/$ARTIFACT"
 [[ -f "$DIST_PATH" ]] || fail "runtime artifact not found: $DIST_PATH"
 SHA256="$(sha256sum "$DIST_PATH" | awk '{print $1}')"
 KEY="${R2_PREFIX#/}/runtime/mash-cv/runtime/$PLATFORM/$ARTIFACT"

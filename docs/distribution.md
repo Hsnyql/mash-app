@@ -1,357 +1,63 @@
-# 发布与分发
+# 发布指南
 
-mash 发布三个独立版本的 artifact：应用、`mash-cv` code package 与 `mash-cv` runtime package。三者都经由公开 CDN 发布到 Cloudflare R2，但发布频率和更新入口不同。
+CV 识别代码随 App 内置；只有 Python 解释器、原生依赖和 OCR 模型组成的 runtime 独立下载。开发环境见[贡献指南](../CONTRIBUTING.md)，资源包发布见[资源更新流程](asset-bundle-update.md)。
 
-## R2 布局
+## 版本与打包
 
-当前默认值为 `R2_BUCKET=mash` 与 `R2_PREFIX=mash`。公开 URL 由 `RELEASE_BASE_URL` 与 object key 拼接而成。
+- App 使用 `versions.toml` 的 `[app].version`，与 Tauri、Cargo 和 `vX.Y.Z` tag 一致。
+- runtime 使用 `[mash_cv.runtime].<platform>`，各平台独立版本，对应 `cv-runtime/<platform>/X.Y.Z` tag。
+- CV code 没有独立版本、远端 ZIP、下载状态或发布 tag。修改识别代码时发布新 App。
 
-```text
-mash/
-  releases/
-    versions/
-      v0.2.2/
-        darwin-aarch64/
-          mash.app.tar.gz
-          mash.app.tar.gz.sig
-        windows-x86_64/
-          Mash_0.2.2_x64-setup.exe
-          Mash_0.2.2_x64-setup.exe.sig
-        linux-x86_64/
-          Mash_0.2.2_amd64.AppImage
-          Mash_0.2.2_amd64.AppImage.sig
-        latest.json
-    stable/
-      latest.json
+`src-tauri/build.rs` 将 `sidecar/cv-code/mash_cv/` 复制到生成的 `resources/mash-cv-code/mash_cv/`，排除 `models`、Python 缓存和字节码，保留轻量分类器资源。OCR 模型、依赖锁文件、启动器和原生构建器位于 `sidecar/cv-runtime/`。正式版仅从 App 资源目录加载代码；开发模式读取源码。旧版下载的 code 目录不再加载，也不会删除，以免影响仍使用它的旧 App。
 
-  downloads/
-    latest/
-      Mash_aarch64.dmg
-      Mash_x64-setup.exe
-    versions/
-      Mash_0.5.3_aarch64.dmg
-      Mash_0.2.2_x64-setup.exe
+`runtime-manifest.json` 仅保存每个平台的 runtime 版本、URL 和 SHA-256，格式见 [CV 资源](../src-tauri/resources/README.md#runtime-manifestjson)。
 
-  runtime/
-    mash-cv/
-      code/
-        mash-cv-code-v0.2.2.zip
-      runtime/
-        darwin-aarch64/
-          mash-cv-runtime-darwin-aarch64-v0.2.2.zip
-        windows-x86_64/
-          mash-cv-runtime-windows-x86_64-v0.2.2.zip
-        linux-x86_64/
-          mash-cv-runtime-linux-x86_64-v0.1.0.zip
-```
+## GitHub Actions 发布
 
-在 `s3://mash/mash/...` 中，第一个 `mash` 是 bucket 名，第二个 `mash` 是 object prefix。
+1. 在默认分支运行 [App release](../.github/workflows/app-release.yml)，填写已审查的 `source_ref` 和递增的 `app_version`。无需填写 CV code 版本或其他 workflow 的 run ID。
+2. 流水线先固定源码 SHA、构建工具 SHA 和 runtime 清单，检查版本、tag、更新说明和 runtime 清单的版本、URL、SHA-256。检查不通过时直接失败，原因显示在 Summary；发布计划 artifact 保留 30 天。
+3. 两个平台分别校验内置 CV code 与清单指定的 runtime。任一平台校验或构建失败，后续发布 job 不会执行，更新通道保持不变。
+4. 发布成功后合并 `codex/app-release-<version>` 版本同步 PR；发生冲突时手动同步发布提交。发布已完成的产物不会因同步失败而撤回。
 
-## 版本来源
+流水线每次从固定源码构建一个内部 code 验证 ZIP，版本名跟随目标 App；它只用于两个平台的兼容性验证和候选留存，不上传 R2，不创建独立 GitHub Release。Windows x64 和 macOS Apple Silicon 使用同一份 code 候选与各自固定的 runtime，运行源码测试、冻结 runtime 协议/OCR 检查、Rust 安装测试和 App 构建。
 
-版本由 `versions.toml` 管理：
+构建时将 code 打入 App。只有两个平台都通过后，才验证 updater 签名、条件上传 App 产物、通过 R2 API 回读校验 SHA-256、创建 App tag/GitHub Release，最后更新 `stable`、`windows-stable` 以及直接下载入口。两个通道包含本批次的平台条目。macOS Intel 暂不参与该发布矩阵。
 
-```toml
-[app]
-version = "0.2.2"
+CI 的 runtime 下载、产物回读、通道和直接下载入口校验统一走 R2 API，不把 runner 对公开 CDN 的访问结果作为发布门槛。App 清单与安装包下载地址继续使用公开 CDN；API 校验确认存储内容一致，不证明每个用户的 CDN 访问结果。
 
-[mash_cv]
-code = "0.2.2"
+## 发布入口
 
-[mash_cv.runtime]
-darwin-aarch64 = "0.2.2"
-windows-x86_64 = "0.1.0"
-linux-x86_64 = "0.1.0"
-```
+先提交工作区改动，在 `CHANGELOG.md` 的“未发布”或目标版本标题下准备更新说明。以下为命令用法，版本参数均替换为目标递增版本。
 
-Runtime 按操作系统和 CPU 架构独立维护版本；发布某个平台只更新该平台的版本、URL 和 SHA-256。CV code 继续共用一个版本。现有 macOS runtime 保留历史版本号 `2026.05.08-runtime1`，后续新发布版本使用 `x.x.x` 格式。tag 约定：
+App release 不再根据 runtime 源码文件变更或历史 tag 判断是否必须重发 runtime。它下载清单固定的原生 runtime，验证 SHA-256，并在 Windows 和 macOS 上运行内置识别代码的协议与 OCR 冒烟检查；任一检查失败，发布终止。这些检查覆盖启动和基础 OCR 链路，不代表所有识别功能都经过验证。
 
-- App：`v0.2.2`
-- CV code：`cv-code/0.2.2`
-- CV runtime：`cv-runtime/darwin-aarch64/0.2.2`
-
-## 完整发布编排
-
-平台脚本位于 `scripts/macos/`、`scripts/windows/` 与 `scripts/linux/`；跨平台 Node 工具位于
-`scripts/shared/`。`pnpm templates:diff` 和 `pnpm test:scripts` 已引用新路径。
-以下 Bash 示例用于 macOS，Windows 原生 PowerShell 完整流程见
-[Windows 构建与发布](windows.md)。
-
-`scripts/macos/release.sh` 串联测试、更新日志、CV artifact、runtime manifest、App
-版本、updater、DMG 与 Git refs。默认仅输出只读计划；添加 `--publish` 后才会
-提交、打 tag 或上传，添加 `--push` 后才会推送 Git refs。
-
-```bash
-# 检查发布计划
-mise exec -- scripts/macos/release.sh 0.2.2
-
-# 只发布 App updater
-mise exec -- scripts/macos/release.sh 0.2.2 --publish
-
-# 同时发布 CV code、DMG，并在全部验证通过后推送 Git refs
-mise exec -- scripts/macos/release.sh 0.2.2 \
-  --cv-code 0.2.2 \
-  --dmg \
-  --push \
-  --publish
-```
-
-发布前工作区必须干净，`CHANGELOG.md` 中必须有 `## 未发布` 或目标版本标题。
-脚本会检查自上次发布以来的 CV code/runtime 相关改动；检测到改动却未提供
-对应版本号时会停止实际发布。CV runtime 只在显式传入 `--cv-runtime` 时发布。
-
-Windows 对应入口：
-
-```powershell
-# 只读计划
-./scripts/windows/release.ps1 0.16.0 -CvCode 0.4.27 -CvRuntime 0.3.0 -Installer
-# 执行测试、日志、版本、CV 发布、updater、安装包下载与 Git 推送
-./scripts/windows/release.ps1 0.16.0 -CvCode 0.4.27 -CvRuntime 0.3.0 -Installer -Push -Publish
-```
-
-Windows 的 `-Installer` 发布 NSIS `.exe`；macOS 的 `--dmg` 发布 DMG；Linux 发布 AppImage 和 DEB。
-Windows 编排在新版本检测到 CV 改动时要求显式版本号；对同一 `vX.Y.Z` tag
-补发 Windows 时不修改日志、版本或 CV 清单，直接合并同版本 updater 平台。
-
-## App 发布
-
-Windows x64 的原生构建和 PowerShell 发布入口见 [Windows 构建与验证](windows.md)。
-跨平台 updater 必须串行发布，并合并同一版本的 `platforms` 条目。
-
-应用通过 Tauri updater 分发；客户端仅读取 channel manifest。Linux 使用 AppImage updater artifact，DEB 作为手动安装包：
+仅目录移动或打包脚本整理不要求重发 runtime。确实需要新的原生依赖、OCR 模型或启动器时，在对应平台先发布并应用新 runtime，再重新运行 App release。例如：
 
 ```text
-https://mash.xiaotongx.com/mash/releases/stable/latest.json
+scripts/macos/release-cv-runtime.sh --platform darwin-aarch64 <runtime-version>
+./scripts/windows/release-cv-runtime.ps1 <runtime-version> -Platform windows-x86_64
+scripts/linux/release-cv-runtime.sh <runtime-version>
 ```
 
-`latest.json` 指向不可变 artifact：
+runtime 发布脚本构建、上传、校验并更新目标平台版本和清单，创建提交与 tag；将这些提交和 tag 同步到远端后再发布引用它的 App。不要覆盖已发布的 runtime ZIP。
+
+## 本地 App 发布
+
+本地需开发依赖、Poetry、AWS CLI、R2 凭据和匹配的 updater 私钥。macOS 默认使用 AWS profile `mash`；Windows 使用默认凭据链。对象前缀默认 `mash`，通道分别为 `stable` 和 `windows-stable`。Windows Authenticode 与 updater 签名独立。
 
 ```text
-mash/releases/versions/v0.2.2/darwin-aarch64/mash.app.tar.gz
+scripts/macos/release.sh <app-version>
+scripts/macos/release.sh <app-version> --dmg --push --publish
+pnpm release:windows <app-version>
+pnpm release:windows <app-version> -Installer -Push -Publish
 ```
 
-发布流程：
+不带发布开关时仅打印计划。需要升级 runtime 时，加 `--cv-runtime <version>` 或 `-CvRuntime <version>`。先提交工作区，并在 `CHANGELOG.md` 中准备用户可见的更新说明。完整验证应包含前端、Rust 与 Python 三套测试。
 
-```bash
-scripts/macos/bump-app-version.sh 0.2.2
-git push --follow-tags
-```
+Linux x86_64 的 AppImage、DEB、独立 runtime 和 updater 本地入口见 [Linux 构建与发布](linux.md)。Linux 暂不参与上述 Windows/macOS App release 发布矩阵。
 
-应用 updater 使用本地发布入口：
+## 重试与恢复
 
-```bash
-R2_ENDPOINT=... R2_BUCKET=... RELEASE_BASE_URL=... scripts/macos/release-tauri-updater.sh
-```
+优先使用 **Re-run failed jobs**，复用固定版本和已验证候选，不重新构建不同内容的同版本二进制。已存在的版本化对象只有哈希相同才允许复用；tag 不移动，通道拒绝降级，指针通过 ETag 条件写入保护。
 
-本地脚本要求当前 commit 恰好位于 `vX.Y.Z` tag 且 worktree 干净。
-macOS 构建 `app` bundle，不生成 DMG；Windows 构建 NSIS 安装包。
-脚本保留同版本已发布的平台，并拒绝将 channel 降级到更旧版本。
-
-## DMG 安装包下载
-
-DMG 安装包是直接供用户下载的产物，与 Tauri updater channel 分离，发布在 `downloads/`：
-
-```text
-mash/downloads/latest/Mash_aarch64.dmg
-mash/downloads/versions/Mash_0.5.3_aarch64.dmg
-```
-
-公开 URL：
-
-```text
-https://mash.xiaotongx.com/mash/downloads/latest/Mash_aarch64.dmg
-https://mash.xiaotongx.com/mash/downloads/versions/Mash_0.5.3_aarch64.dmg
-```
-
-`downloads/latest/` 是网站链接和手动安装使用的可变稳定下载路径。`downloads/versions/` 存放可回滚、可手动恢复的版本化 DMG。应先发布版本化 DMG，再覆盖 `downloads/latest/` 下的对应文件。发布脚本会为同一 architecture 仅保留最近三个版本化 DMG。
-
-发布流程：
-
-```bash
-R2_ENDPOINT=... R2_BUCKET=... RELEASE_BASE_URL=... scripts/macos/release-dmg.sh
-```
-
-## CV Code 发布
-
-CV code package 包含轻量 Python source，是 `sidecar/mash_cv/mash_cv/` 下识别逻辑变更的高频发布包。
-
-发布流程：
-
-```bash
-scripts/macos/bump-cv-code-version.sh 0.2.2
-git push origin cv-code/0.2.2
-```
-
-版本更新脚本会创建 `cv-code/*` tag；当前仓库没有 CV code 上传 workflow，
-请使用本地发布入口上传（仅推送 tag 不会上传）：
-
-```bash
-R2_ENDPOINT=... R2_BUCKET=... RELEASE_BASE_URL=... scripts/macos/release-cv-code.sh 0.2.2
-```
-
-脚本构建：
-
-```text
-sidecar/mash_cv/dist/mash-cv-code-v0.2.2.zip
-```
-
-并上传至：
-
-```text
-mash/runtime/mash-cv/code/mash-cv-code-v0.2.2.zip
-```
-
-发布脚本会打印公开 URL 和 SHA-256。请用这些值更新当前平台的 `src-tauri/resources/runtime-manifest.json`，包括 `codeUrl`、`codeSha256` 与 `mashCvCodeVersion`。完整发布编排会自动完成这一步。
-
-Windows 使用 `scripts/windows/bump-cv-code-version.ps1 <version>` 和
-`scripts/windows/release-cv-code.ps1 <version>`。code ZIP 内容由共享 Python
-builder 生成，与平台无关；不要重复发布同版本但不同内容的 ZIP。
-
-### GitHub Actions code 发布
-
-正式发布使用 `.github/workflows/cv-code-release.yml` 的手动运行入口。workflow
-默认只构建候选包；勾选 `publish` 后，必须在默认分支上运行，并按以下顺序执行：
-
-发布 environment `cv-code-release` 需要配置 `R2_ACCESS_KEY_ID` 与
-`R2_SECRET_ACCESS_KEY` secrets，以及 `R2_ENDPOINT`、`R2_BUCKET` 和可选的
-`RELEASE_BASE_URL`、`R2_PREFIX` variables。为该 environment 配置人工审批，
-使候选测试和真正上传分开。
-
-1. 固定 `source_ref` 到 commit SHA，读取该 commit 中已发布的 Windows x64 与
-   macOS Apple Silicon runtime 版本、URL 和 SHA-256；
-2. 在 Linux 上构建一次 `mash-cv-code-v<version>.zip`，保存候选包和发布记录；
-3. 在 Windows 与 macOS runner 上分别下载清单中的原生 runtime，使用同一份 code
-   ZIP 做源码测试、冻结 runtime 兼容性测试和对应平台的 Rust 导入测试；
-4. 使用候选包原文件上传 R2，使用条件写入保护不可变对象，再从公开 CDN 完整下载
-   并验证 SHA-256；
-5. 创建或验证 `cv-code/<version>` tag，并生成更新 `versions.toml` 与
-   `runtime-manifest.json` 的 PR。
-
-Code 版本是所有平台共用的字段，因此 PR 会同步更新 manifest 中每个平台的
-`codeUrl` 与 `codeSha256`；runtime 字段和 runtime 文件不会被修改。发布失败后应
-重新运行同一个候选版本，脚本会复用同 SHA-256 的已上传对象，并拒绝覆盖不同内容。
-App 发布必须等这个 PR 合并后再创建新的 App tag。
-
-## CV Runtime 发布
-
-CV runtime package 包含 PyInstaller onedir build、native dependency、model 及 runtime layout。它体积较大，应低频发布。仅在以下变更时升级 runtime 版本：
-
-- PyInstaller dependency
-- Native dependency
-- OCR model 或其他重量级 runtime resource
-- Runtime launcher 或 archive layout
-
-发布流程：
-
-```bash
-R2_ENDPOINT=... R2_BUCKET=... RELEASE_BASE_URL=... scripts/macos/release-cv-runtime.sh 0.2.2
-```
-
-脚本将：
-
-1. 更新 `versions.toml` 中的 `[mash_cv.runtime].<platform>`；
-2. 构建 `mash-cv-runtime-<platform>-v<version>.zip`；
-3. 将 artifact 上传至 R2；
-4. 计算 SHA-256；
-5. 更新 `src-tauri/resources/runtime-manifest.json`；
-6. 创建 commit；
-7. 为 commit 打上 `cv-runtime/<platform>/<version>` tag。
-
-上传前脚本会打印 artifact 名称、大小、S3 target 与公开 URL；上传后打印耗时和平均上传速度。
-
-Windows 原生 runtime 使用 `scripts/windows/release-cv-runtime.ps1 <version>`，
-也执行构建、上传、远端验证、清单更新、commit 和平台 tag。
-`-Platform` 必须匹配原生 MSVC host；不支持把本机 ZIP 标记成另一平台。
-
-## Windows 安装包下载
-
-`scripts/windows/release-installer.ps1` 从干净的 app tag 构建 NSIS 安装包，
-先上传并验证版本文件，再覆盖稳定下载链接：
-
-```text
-mash/downloads/versions/Mash_0.16.0_x64-setup.exe
-mash/downloads/latest/Mash_x64-setup.exe
-```
-
-`-SkipBuild` 复用已经构建的当前版本签名产物，完整编排在 updater 成功后使用
-此选项。只选择当前版本和架构的 `.exe` 与 `.sig`，不会回退到旧安装包。
-版本文件使用 immutable 长缓存，latest 使用 `no-cache`。Windows 下载入口保留
-所有历史版本；macOS DMG 的保留数量策略保持不变。
-
-默认发布签名安装包。没有 Tauri updater 私钥时，可以显式使用 `-Unsigned`
-构建并发布可手动安装的 `.exe`；这不会生成签名、不会上传 updater artifact，
-也不会修改 `stable/latest.json`：
-
-```powershell
-./scripts/windows/release-installer.ps1 -Unsigned
-```
-
-## Runtime Manifest
-
-`src-tauri/resources/runtime-manifest.json` 会随 app 打包。应用启动时用它判断必须在本机安装哪些 CV code/runtime 版本。
-
-```json
-{
-  "mashCvCodeVersion": "0.2.2",
-  "platforms": {
-    "darwin-aarch64": {
-      "runtimeVersion": "0.2.2",
-      "runtimeUrl": "https://mash.xiaotongx.com/mash/runtime/mash-cv/runtime/darwin-aarch64/mash-cv-runtime-darwin-aarch64-v0.2.2.zip",
-      "runtimeSha256": "...",
-      "codeUrl": "https://mash.xiaotongx.com/mash/runtime/mash-cv/code/mash-cv-code-v0.2.2.zip",
-      "codeSha256": "..."
-    }
-  }
-}
-```
-
-本地安装路径：
-
-```text
-app_data_dir()/runtime/mash-cv/runtime/<platform.runtimeVersion>/mash-cv-runtime/
-app_data_dir()/runtime/mash-cv/code/<mashCvCodeVersion>/mash-cv-code/
-```
-
-本机缺少 manifest 所要求的版本时，app 会提示用户安装 CV package。更新 app 不代表 CV package 已安装；是否需要安装仍由 manifest 与本地安装状态共同决定。
-
-从全局 runtime 版本迁移后，macOS 使用现有产物的历史版本号
-`2026.05.08-runtime1`。若旧安装记录被标为 `0.1.0`，应用会要求重新安装
-清单所指向的现有 runtime 包；下载地址和 SHA-256 没有变化。
-
-## 上传说明
-
-R2 上传使用 S3 API endpoint：
-
-```text
-https://<account-id>.r2.cloudflarestorage.com
-```
-
-该 endpoint 不同于公开 CDN domain。Cloudflare zone 级 WAF、Bot 与 Block AI Bots 设置通常不影响 S3 API endpoint。若出现 TCP connect timeout，问题位于本机到 R2 S3 API 的网络路径。常见处理方式：
-
-- 让终端经过 proxy 或 VPN；
-- 切换网络；
-- 改用 GitHub Actions 上传。
-
-连通性检查：
-
-```bash
-curl -I https://<account-id>.r2.cloudflarestorage.com
-```
-
-若该命令超时，发布脚本也会超时。
-
-## 缓存策略
-
-不可变 artifact 使用长缓存：
-
-```text
-Cache-Control: public, max-age=31536000, immutable
-```
-
-可变 channel manifest 使用短缓存或不缓存：
-
-```text
-Cache-Control: no-cache
-```
-
-App 发布时，先上传版本化 artifact，再上传版本化 `latest.json`，最后覆盖 `stable/latest.json`。否则客户端可能先看到新版本，却遇到仍在上传的 artifact。
+通道、GitHub 和直接下载入口之间不是原子事务；中断后可能部分推进，重试完成剩余步骤。不要同时运行本地发布脚本和 CI。发布完成需确认版本、tag、签名、R2 内容和通道一致；本地测试不代表已通过真实 Windows 安装或设备验证。资源回滚见[资源流程](asset-bundle-update.md#回滚)。

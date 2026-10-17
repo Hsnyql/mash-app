@@ -1,67 +1,46 @@
 # 模块结构
 
-本文说明 backend 与 frontend 拆分后的当前源码布局。
+## 前端：`src/`
 
-## Frontend
+| 目录 / 文件 | 职责 |
+| --- | --- |
+| `main.tsx` | React 入口、主题和全局样式 |
+| `App.tsx` | 项目加载、页面路由、更新检查与自动化事件 |
+| `features/` | 按业务组织界面：队伍、战斗、高级策略、调试、设置、强化等 |
+| `components/common/` | 多个功能共用的 UI 组件和展示辅助函数 |
+| `styles/` | 全局 CSS，按功能拆分；较大模块可用子目录和 `index.css` 聚合 |
+| `types/` | 与 Rust serde DTO 对应的 TypeScript 类型 |
+| `test/` | Vitest 配置和共享渲染辅助函数 |
 
-Frontend 代码位于 `src/`。
+功能测试放在相邻的 `__tests__/`，应用级测试放在 `src/__tests__/`。业务状态、校验和持久化由后端负责；前端只处理展示与临时交互状态。
 
-- `main.tsx` 是 browser/Tauri entrypoint，并导入 `styles/index.css`。
-- `App.tsx` 负责顶层编排：项目加载、页面路由、更新检查、自动化事件和跨 feature wiring。
-- `components/common/` 存放多个 feature 共用的 UI primitive 与小型 helper：`BattleActorIcon`、`OptionCardRadioGroup`、`SectionHeading`、`ThresholdLevelPicker`、`battleActorLabels`。
-- `features/team/` 负责队伍设置、助战要求、从者/CE 选择、队员 helper 与测试。
-- `features/battle/` 负责 legacy battle-scene 编辑、指令编辑、battle page shell 与测试。
-- `features/advanced/` 负责高级 battle-scene、Grand card strategy、backend-defined Grand class/role helper、Grand rule slot helper 与测试。
-- `features/debug/` 负责 debug page、canvas、popout window、debug DTO/helper 与测试。
-- `features/settings/` 负责设置页面、runtime/assets/self-check 控件与测试。
-- `features/setup/`、`features/enhancement/`、`features/status/`、`features/projects/` 分别负责对应页面、component 与测试。
-- `styles/` 包含全局样式入口和按 feature 划分的 CSS。CSS 按设计保持 global；不要引入 CSS Modules 或 styled-components。大型 feature 可像 `styles/team/` 一样使用带 `index.css` aggregator 的子目录。
-- `types/` 存放必须与 Rust serde DTO 保持一致的 frontend interface。
-- `test/` 存放共享 Vitest setup 与 render helper。
+## 后端：`src-tauri/src/`
 
-测试放在所属 feature 旁的 `__tests__/` 目录；共享 app-level 测试保留在 `src/__tests__/`。
+| 目录 / 文件 | 职责 |
+| --- | --- |
+| `main.rs` / `lib.rs` | 程序入口、Tauri 插件、共享状态、菜单与命令注册 |
+| `commands/` | 设备、资源、自动化、目录、调试、项目、运行时和设置命令 |
+| `runner/` | 战斗状态机及技能、选卡、阵容、助战、冠位策略 |
+| `enhancement_runner/` | 从者强化 |
+| `craft_essence_enhancement_runner/` | 礼装强化策略与材料选择 |
+| `friend_point_summon_runner.rs` | 友情点召唤 |
+| `screen/` | Python 子进程、JSON-line 协议、CV 类型和识别操作 |
+| `models/` | 项目、队伍、高级战斗规则等共享数据结构 |
+| `adb.rs` / `touch/` | ADB 通信和底层输入操作 |
+| `platform/` | 操作系统适配 |
+| `paths.rs` / `server.rs` | 路径与迁移、区服与分辨率校验 |
+| `resources/` | 通过 `include_str!` 编入程序的目录数据 |
 
-## Backend
+`src-tauri/resources/` 则是随应用打包的 CV 配置、模板、图片、运行时清单和 scrcpy server，详见[资源说明](../src-tauri/resources/README.md)。
 
-Backend 代码位于 `src-tauri/src/`。
+## 图像识别：`sidecar/cv-code/`
 
-- `main.rs` 是精简的 binary entrypoint。
-- `lib.rs` 负责 Tauri builder：plugin registration、managed state、menu 与 command registration。
-- `commands/` 存放 Tauri command 及相关 helper：
-  - `adb.rs`：ADB status/reset/screenshot。
-  - `assets.rs` + `assets/`：asset bundle manifest 与安装计划；`import.rs` 负责本地 ZIP 导入和共享目录安装，`status.rs` 负责安装状态与 self-check，`download.rs` 负责远端下载与校验。
-  - `automation.rs` + `automation/`：共享 start/stop/status，以及 battle、servant enhancement、CE enhancement、friend-point summon 的 lifecycle command。
-  - `catalog.rs` + `catalog/`：catalog facade；`servants.rs` 负责从者目录解析与 variant 展开，`portraits.rs` 负责从者立绘/头像资源选择与偏好持久化，`craft_essences.rs` 负责 CE catalog 与卡面资源，`metadata.rs`、`mystic_codes.rs`、`skills.rs` 分别负责 metadata localization、御主礼装资料和从者技能资料；`skills/selection.rs` 集中处理技能追加选择脚本。
-  - `debug.rs` + `debug/`：通用模板命令入口；`session.rs` 管理共享 sidecar，`capture.rs` 管理截图/视频流，`battle.rs`、`noble_phantasm.rs`、`support.rs`、`enhancement.rs` 按诊断领域分组。
-  - `projects.rs` + `projects/`：项目 CRUD 与场景文件命令；`normalization.rs` 负责项目兼容迁移和约束归一化，`catalog.rs` 负责目录分组与排序，`ui_settings.rs` 负责应用 UI 偏好持久化，`config_transfer.rs` 负责配置 import/export。
-  - `runtime.rs` + `runtime/`：CV runtime facade；`archive.rs` 集中处理 ZIP 校验、安全解压和可执行权限，`download.rs` 负责远端下载与进度事件，`install.rs` 负责校验后的替换安装和版本记录，`resolution.rs` 负责 runtime resource resolution。
-  - `settings.rs` + `settings/`：app settings facade、startup migration、server selection 与 update-check settings；`debug_settings.rs` 封装调试开关的持久化、构建模式过滤和一次性消费逻辑，测试跟随各自模块放置。
-- `runner/` 按 domain 拆分战斗自动化 state machine：
-  - `engine.rs`、`state.rs`：tick routing 与权威流程状态。
-  - `prebattle.rs`、`results.rs`、`ap_recovery.rs`：战前、结算和 AP 恢复流程。
-  - `support.rs` + `support/`：助战筛选 facade；`class_filter.rs` 负责职阶策略，`class_filter_runtime.rs` 负责国服 EXTRA 弹窗交互，`craft_essence.rs` 负责礼装配置、区域计算和诊断，`craft_essence_runtime.rs` 负责礼装模板解析和设备校验，`requirements.rs` 负责等级、技能、星图门槛和诊断文本，`scrolling.rs` 负责滚动决策和诊断，`navigation_runtime.rs` 负责列表滚动、耗尽探针、刷新和旧版选择流程，`runtime.rs` 负责主选择编排。
-  - `actions.rs` + `actions/helpers.rs`：技能/换人执行与纯坐标、分类 helper。
-  - `attack.rs` + `attack/`：选卡入口；`critical.rs`、`noble_phantasm.rs`、`conditions.rs` 负责纯决策，`runtime.rs`、`selection_runtime.rs`、`advanced_runtime.rs` 负责设备交互流程。
-  - `party.rs` + `party/`：阵容 identity 入口；`lineup.rs`、`resolution.rs`、`replay.rs`、`runtime.rs` 分别负责阵容变更、动作槽位解析、历史重放和运行时身份构建。
-  - `grand.rs` + `grand/`：共享 Grand rule engine/strategy registry，以及按 class 划分的 strategy module。
-  - `config.rs`、`coords.rs`、`runtime.rs`：runner 配置、归一化坐标和共享运行时 helper。
-  - `tests.rs`：跨 runner 子模块的行为测试。
-- `touch/` 存放底层 touch input construction。
-- `screen.rs` 是 Python sidecar IPC facade；`screen/client.rs` 管理进程与请求生命周期，`screen/protocol.rs` 定义 JSON-line protocol，`screen/types.rs` 定义通过 `crate::screen` re-export 的 DTO，`screen/operations/` 按 battle、support、enhancement、template matching 拆分调用封装，`screen/tests.rs` 覆盖协议与 DTO。
-- `enhancement_runner.rs` + `enhancement_runner/` 负责从者强化自动化及其 runtime helper。
-- `craft_essence_enhancement_runner.rs` + `craft_essence_enhancement_runner/` 负责 CE 强化策略、材料选择、runtime 与测试。
-- `friend_point_summon_runner.rs` 负责友情点召唤自动化。
-- `models.rs` + `models/`：共享 serde DTO facade；`advanced.rs` 负责高级战斗条件、动作、规则和场景，`project.rs` 负责项目、队伍槽位、助战/Grand 配置、识别覆盖项和项目目录模型。
-- `paths.rs` 存放 app-data/resource path resolution 与 migration helper。
-- `server.rs` 存放 server enum 与 stream-resolution validation。
-- 根 `tests.rs` 存放跨 module backend 测试；domain-specific 测试放在最近的 sibling `tests.rs` 或 local `#[cfg(test)]` module。
-- `src-tauri/src/resources/` 存放通过 `include_str!` 编入 backend 的 catalog JSON；`src-tauri/resources/` 存放随应用分发的 runtime manifest、server CV 配置、模板、图片与 scrcpy server。两者不要混用。
+Python 子进程负责 OpenCV / OCR 识别和 scrcpy 视频流处理，通过标准输入输出与 Rust 通信。业务代码、测试和训练工具位于 `cv-code/`；依赖锁文件、OCR 模型和原生构建器位于 `sidecar/cv-runtime/`。环境、测试和打包见 [mash-cv](../sidecar/cv-code/README.md)。
 
-## 新文件规则
+## 扩展约定
 
-- Feature 自有 React UI 放在 `src/features/<feature>/`，不要放到根 `src/components/`。
-- 只有至少两个 feature 使用或抽象明显可复用时，才放入 `src/components/common/`。
-- 测试放在最近的 sibling `__tests__/`。
-- 新 Tauri command 放在 `src-tauri/src/commands/`；当某个 domain 已有同名子目录时，按现有职责放入该子模块，并由同名 `.rs` facade re-export/register。
-- 自动化 state-machine 逻辑保留在 `runner/` 或 `enhancement_runner.rs`；状态或页面路由变化时同步更新 `docs/state-machines/`。
-- 大文件拆分优先保留 facade：`foo.rs` 放共享类型、入口与 re-export，`foo/` 按业务职责拆分纯逻辑、runtime/device I/O 和测试。不要只按行数机械切文件。
+- React 功能代码放入 `features/<feature>/`；至少两个功能共用或明显可复用的组件再放入 `components/common/`。沿用全局 CSS。
+- Tauri 命令放入 `commands/` 对应领域；自动化流程放入对应 runner，状态和页面路由变化同步更新[状态机文档](README.md#自动化与识别)。
+- 大模块使用 `foo.rs` 保留入口、共享类型与 re-export，`foo/` 按职责拆分纯逻辑、设备 I/O 和测试。
+- Rust 测试放在最近的同级 `tests.rs` 或本地 `#[cfg(test)]` 模块；跨模块测试放在所属领域的汇总测试模块。
+- Rust 与 Python 的平台差异分别收敛到 `platform/` 和 `mash_cv/host/`；构建脚本按平台放入 `scripts/{macos,windows}/`，共享工具放入 `scripts/shared/`。

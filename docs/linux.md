@@ -26,7 +26,7 @@ Ubuntu 22.04/24.04 均使用 WebKitGTK 4.1 开发包。运行已打包应用时�
 scripts/linux/prepare-linux-adb.sh
 ```
 
-构建 CV runtime 和 code package：
+构建独立 CV runtime 和内部 code 验证包（code 随 App 打包，不再单独发布或下载）：
 
 ```bash
 scripts/linux/build-cv.sh
@@ -51,7 +51,7 @@ src-tauri/target/release/bundle/appimage/
 src-tauri/target/release/bundle/deb/
 ```
 
-`mash-cv` runtime 不会嵌入 Tauri 应用，而是作为独立的 Linux runtime ZIP 分发。首次运行前，需要在应用的资源管理页面安装与 `src-tauri/resources/runtime-manifest.json` 匹配的 runtime 和 code 包。
+`mash-cv` runtime 不会嵌入 Tauri 应用，而是作为独立的 Linux runtime ZIP 分发。首次运行前，需要在应用的资源管理页面安装与 `src-tauri/resources/runtime-manifest.json` 匹配的 runtime。识别代码由 `src-tauri/build.rs` 从 `sidecar/cv-code/` 内置到 App，无需单独安装。
 
 ## 测试
 
@@ -60,8 +60,8 @@ pnpm lint
 pnpm test
 pnpm test:scripts
 cargo test --manifest-path src-tauri/Cargo.toml
-cd sidecar/mash_cv
-poetry install
+cd sidecar/cv-runtime
+poetry install --no-root
 poetry run pytest
 ```
 

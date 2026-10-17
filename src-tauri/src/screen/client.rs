@@ -21,6 +21,7 @@ pub struct SidecarClient {
     /// Last (width, height) reported by `start_stream`. None until a stream
     /// has been started successfully.
     stream_size: Option<(u32, u32)>,
+    stream_device: Option<(String, u32)>,
     healthy: bool,
     pub(super) detection_screens: Option<Vec<String>>,
     pub(super) diagnostic_supported: bool,
@@ -58,10 +59,10 @@ impl SidecarClient {
             ));
         }
         let code_dir = crate::resolve_sidecar_code_dir(app)
-            .ok_or_else(|| "无法解析 mash-cv code runtime，请先安装 CV 代码包".to_string())?;
+            .ok_or_else(|| "未找到应用内置的 CV 代码，请重新安装应用".to_string())?;
         if !code_dir.join("mash_cv").is_dir() {
             return Err(format!(
-                "未找到 mash-cv code 包 ({}). 请先下载并安装当前版本需要的 CV 代码包。",
+                "未找到 mash-cv code 包 ({}). 请重新安装应用。",
                 code_dir.display()
             ));
         }
@@ -86,6 +87,7 @@ impl SidecarClient {
             .shell()
             .command(&exe)
             .env("MASH_CV_CODE_DIR", code_dir.to_string_lossy().to_string())
+            .env("PYTHONDONTWRITEBYTECODE", "1")
             .env(
                 "MASH_CV_MODELS_DIR",
                 models_dir.to_string_lossy().to_string(),
@@ -141,6 +143,7 @@ impl SidecarClient {
             line_rx,
             next_id: 1,
             stream_size: None,
+            stream_device: None,
             healthy: true,
             detection_screens: None,
             diagnostic_supported: false,
@@ -378,24 +381,26 @@ impl SidecarClient {
     /// frame will measure, not the raw display size.
     pub fn start_stream(
         &mut self,
-        adb_path: &Path,
+        adb: &crate::adb::Adb,
         jar_path: &Path,
-        serial: Option<&str>,
         max_size: u32,
         bit_rate: u32,
         max_fps: u32,
     ) -> Result<(u32, u32), CvError> {
+        self.stream_size = None;
+        self.stream_device = None;
         let mut req = request(
             SidecarCommand::StartStream,
             serde_json::json!({
-                "adbPath": adb_path.to_string_lossy(),
+                "adbPath": adb.path().to_string_lossy(),
                 "jarPath": jar_path.to_string_lossy(),
                 "maxSize": max_size,
                 "bitRate": bit_rate,
                 "maxFps": max_fps,
+                "displayId": adb.display_id(),
             }),
         )?;
-        if let Some(s) = serial {
+        if let Some(s) = adb.serial() {
             if let Some(obj) = req.as_object_mut() {
                 obj.insert("serial".into(), serde_json::Value::String(s.to_string()));
             }
@@ -405,15 +410,34 @@ impl SidecarClient {
             let err = resp["error"].as_str().unwrap_or("unknown error");
             return Err(format!("start_stream failed: {err}").into());
         }
+        if let Err(error) = validate_stream_display(&resp, adb.display_id()) {
+            let _ = self.stop_stream();
+            return Err(error.into());
+        }
         let w = resp["width"].as_u64().unwrap_or(0) as u32;
         let h = resp["height"].as_u64().unwrap_or(0) as u32;
         if w == 0 || h == 0 {
             return Err("start_stream returned invalid dimensions".into());
         }
         self.stream_size = Some((w, h));
+        self.stream_device = adb
+            .serial()
+            .map(|serial| (serial.to_string(), adb.display_id()));
         self.recognition_context["stream"] = serde_json::json!({"width": w, "height": h,
-            "maxSize": max_size, "bitRate": bit_rate, "maxFps": max_fps});
+            "maxSize": max_size, "bitRate": bit_rate, "maxFps": max_fps, "displayId": adb.display_id()});
         Ok((w, h))
+    }
+
+    pub(crate) fn stream_matches_device(
+        &self,
+        device_serial: Option<&str>,
+        display_id: u32,
+    ) -> bool {
+        self.stream_device
+            .as_ref()
+            .is_some_and(|(serial, display)| {
+                Some(serial.as_str()) == device_serial && *display == display_id
+            })
     }
 
     /// Select which battle-HUD digit reader the sidecar should use.
@@ -453,6 +477,7 @@ impl SidecarClient {
             return Err(format!("stop_stream failed: {err}").into());
         }
         self.stream_size = None;
+        self.stream_device = None;
         Ok(())
     }
 
@@ -568,6 +593,21 @@ impl SidecarClient {
     }
 }
 
+fn validate_stream_display(response: &serde_json::Value, display_id: u32) -> Result<(), String> {
+    // Old CV code only captures display 0. Never let it silently pair a
+    // desktop frame with touches bound to a secondary game display.
+    let captured = response
+        .get("displayId")
+        .and_then(serde_json::Value::as_u64);
+    if captured == Some(u64::from(display_id)) || (display_id == 0 && captured.is_none()) {
+        Ok(())
+    } else {
+        Err(format!(
+            "视频流未确认目标显示屏 {display_id}，请更新 CV 代码后重试"
+        ))
+    }
+}
+
 impl Drop for SidecarClient {
     fn drop(&mut self) {
         self.shutdown();
@@ -586,6 +626,7 @@ mod tests {
             line_rx,
             next_id: 1,
             stream_size: None,
+            stream_device: None,
             healthy: true,
             detection_screens: None,
             diagnostic_supported: false,
@@ -593,6 +634,24 @@ mod tests {
             recognition_context: serde_json::json!({}),
             recognition_device: serde_json::json!({}),
         }
+    }
+
+    #[test]
+    fn secondary_display_requires_acknowledgement_from_cv_code() {
+        assert!(validate_stream_display(&serde_json::json!({"displayId": 2}), 2).is_ok());
+        assert!(validate_stream_display(&serde_json::json!({"displayId": 0}), 2).is_err());
+        assert!(validate_stream_display(&serde_json::json!({}), 2).is_err());
+        assert!(validate_stream_display(&serde_json::json!({}), 0).is_ok());
+    }
+
+    #[test]
+    fn cached_stream_is_only_reused_for_same_device_and_display() {
+        let mut client = client_without_process();
+        client.stream_device = Some(("emulator-5554".into(), 2));
+        assert!(client.stream_matches_device(Some("emulator-5554"), 2));
+        assert!(!client.stream_matches_device(Some("emulator-5554"), 0));
+        assert!(!client.stream_matches_device(Some("emulator-5556"), 2));
+        assert!(!client.stream_matches_device(None, 2));
     }
 
     #[test]

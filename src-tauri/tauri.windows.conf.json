@@ -28,6 +28,7 @@
         "type": "embedBootstrapper"
       },
       "nsis": {
+        "installerHooks": "windows/installer-hooks.nsh",
         "installMode": "currentUser",
         "languages": [
           "SimpChinese",
