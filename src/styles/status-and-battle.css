@@ -357,13 +357,15 @@
 }
 
 .adb-device-description,
-.adb-device-selected {
+.adb-device-selected,
+.adb-device-mumu {
   font-size: 11px;
   color: var(--gray-10);
   overflow-wrap: anywhere;
 }
 
-.adb-device-selected {
+.adb-device-selected,
+.adb-device-mumu {
   color: var(--blue-11);
 }
 
@@ -372,6 +374,22 @@
   right: 10px;
   bottom: 10px;
 }
+
+.emulator-dialog {
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+.option-card-radio-group.emulator-choices {
+  flex-direction: column;
+  gap: 8px;
+}
+
+.emulator-choices .option-card-radio-item {
+  padding: 10px 12px;
+}
+
+.emulator-choice-path { overflow-wrap: anywhere; }
 
 /* ── Battle Page ── */
 
