@@ -10,6 +10,7 @@ pub(crate) struct AssetBundleImportResult {
     pub(crate) servant_files: u64,
     pub(crate) craft_essence_files: u64,
     pub(crate) install_dir: String,
+    pub(crate) installed_version: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -46,7 +47,7 @@ fn read_import_asset_version(extracted_root: &Path, import_root: &Path) -> Resul
     Err("文件不是素材包文件".to_string())
 }
 
-fn ensure_asset_import_not_cancelled(cancel: &AtomicBool) -> Result<(), String> {
+pub(super) fn ensure_asset_import_not_cancelled(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::Relaxed) {
         Err("导入已取消".to_string())
     } else {
@@ -257,11 +258,26 @@ pub(crate) fn import_asset_bundle_from_zip_path(
     import_asset_bundle_from_zip_path_with_cancel(zip_path, assets_root, &cancel)
 }
 
+#[cfg(test)]
 pub(crate) fn import_asset_bundle_from_zip_path_with_cancel(
     zip_path: &Path,
     assets_root: &Path,
     cancel: &AtomicBool,
 ) -> Result<AssetBundleImportResult, String> {
+    let paths = [zip_path.to_path_buf()];
+    let manifest = super::import_validation::fixture_manual_import_manifest(&paths);
+    import_asset_bundles_from_zip_paths(&paths, assets_root, &manifest, cancel)
+}
+
+pub(crate) fn import_asset_bundles_from_zip_paths(
+    zip_paths: &[PathBuf],
+    assets_root: &Path,
+    manifest: &ManualAssetImportManifest,
+    cancel: &AtomicBool,
+) -> Result<AssetBundleImportResult, String> {
+    if zip_paths.is_empty() {
+        return Err("请选择素材包或升级包".to_string());
+    }
     cleanup_replaced_asset_trees(assets_root);
     ensure_asset_import_not_cancelled(cancel)?;
     let temp = tempfile::Builder::new()
@@ -272,12 +288,46 @@ pub(crate) fn import_asset_bundle_from_zip_path_with_cancel(
                 .ok_or_else(|| "无法定位素材根目录".to_string())?,
         )
         .map_err(|e| format!("创建临时目录失败: {e}"))?;
-    let extracted_root = temp.path().join("unzipped");
-    fs::create_dir_all(&extracted_root).map_err(|e| format!("创建临时目录失败: {e}"))?;
-    extract_zip_archive_inner(zip_path, &extracted_root, Some(cancel))?;
-
-    let import_root = locate_import_root(&extracted_root);
-    let imported_version = read_import_asset_version(&extracted_root, &import_root)?;
+    let mut roots = Vec::new();
+    let mut patches = Vec::new();
+    for (index, zip_path) in zip_paths.iter().enumerate() {
+        let snapshot = temp.path().join(format!("verified-{index}.zip"));
+        let verified = super::import_validation::stage_verified_archive(
+            zip_path, &snapshot, manifest, cancel,
+        )?;
+        let extracted_root = temp.path().join(format!("unzipped-{index}"));
+        fs::create_dir_all(&extracted_root).map_err(|e| format!("创建临时目录失败: {e}"))?;
+        extract_zip_archive_inner(&snapshot, &extracted_root, Some(cancel))?;
+        let import_root = locate_import_root(&extracted_root);
+        let version = if let Some(patch) =
+            super::patches::read_patch(&extracted_root, &import_root)?
+        {
+            verified.verify_metadata(super::import_validation::VerifiedManualRelease::Patch {
+                from: patch.from_version(),
+                to: patch.to_version(),
+            })?;
+            patches.push(patch);
+            None
+        } else {
+            let version = read_import_asset_version(&extracted_root, &import_root)?;
+            verified.verify_metadata(super::import_validation::VerifiedManualRelease::Base(
+                version,
+            ))?;
+            Some(version)
+        };
+        roots.push((import_root, version));
+    }
+    if !patches.is_empty() {
+        if patches.len() != roots.len() {
+            return Err("完整素材包与升级包不能混合导入".to_string());
+        }
+        return super::patches::install_patches(patches, assets_root, temp.path(), cancel);
+    }
+    if roots.len() != 1 {
+        return Err("完整素材包请单独导入；多选仅支持连续升级包".to_string());
+    }
+    let (import_root, imported_version) = roots.remove(0);
+    let imported_version = imported_version.ok_or("文件不是素材包文件")?;
     ensure_asset_import_not_cancelled(cancel)?;
     let (has_servants, has_ces, servant_stats, ce_stats) =
         install_asset_directories(&import_root, assets_root, true)?;
@@ -290,39 +340,55 @@ pub(crate) fn import_asset_bundle_from_zip_path_with_cancel(
         servant_files: servant_stats.files,
         craft_essence_files: ce_stats.files,
         install_dir: assets_root.to_string_lossy().into_owned(),
+        installed_version: imported_version,
     })
 }
 
 #[tauri::command]
-pub(crate) async fn pick_asset_bundle(app: tauri::AppHandle) -> Result<Option<String>, String> {
+pub(crate) async fn pick_asset_bundle(
+    app: tauri::AppHandle,
+) -> Result<Option<Vec<String>>, String> {
     let picked = app
         .dialog()
         .file()
         .add_filter("ZIP", &["zip"])
-        .set_title("选择素材压缩包")
-        .blocking_pick_file();
-    let Some(path) = picked else {
+        .set_title("选择素材包或升级包（可多选升级包）")
+        .blocking_pick_files();
+    let Some(paths) = picked else {
         return Ok(None);
     };
-    let path = path.into_path().map_err(|e| e.to_string())?;
-    Ok(Some(path.to_string_lossy().into_owned()))
+    paths
+        .into_iter()
+        .map(|path| {
+            path.into_path()
+                .map(|path| path.to_string_lossy().into_owned())
+                .map_err(|e| e.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 #[tauri::command]
 pub(crate) async fn import_asset_bundle(
     app: tauri::AppHandle,
-    zip_path: String,
+    zip_paths: Vec<String>,
     cancel_state: tauri::State<'_, Arc<ResourceDownloadCancelState>>,
 ) -> Result<AssetBundleImportResult, String> {
-    let zip_path = PathBuf::from(zip_path);
-    if !zip_path.is_file() {
+    let zip_paths: Vec<_> = zip_paths.into_iter().map(PathBuf::from).collect();
+    if zip_paths.iter().any(|path| !path.is_file()) {
         return Err("选择的压缩包不存在".to_string());
     }
     let assets_root = app_assets_dir(&app);
+    let manifest = assets_app_manifest(&app)?.manual_import;
     let cancel_state = cancel_state.inner().clone();
     cancel_state.assets.store(false, Ordering::Relaxed);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        import_asset_bundle_from_zip_path_with_cancel(&zip_path, &assets_root, &cancel_state.assets)
+        import_asset_bundles_from_zip_paths(
+            &zip_paths,
+            &assets_root,
+            &manifest,
+            &cancel_state.assets,
+        )
     })
     .await
     .map_err(|e| format!("素材包导入任务失败: {e}"))??;
