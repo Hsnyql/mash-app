@@ -2,12 +2,15 @@ import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import {
   Dialog,
   Flex,
+  IconButton,
   Text,
   TextField,
+  Tooltip,
 } from "@radix-ui/themes";
 import { invoke, convertFileSrc } from "../../tauri";
-import { MagnifyingGlassIcon } from "@radix-ui/react-icons";
+import { GridIcon, MagnifyingGlassIcon, RowsIcon, SizeIcon } from "@radix-ui/react-icons";
 import type { Servant } from "../../types/servant";
+import type { ServantPickerAction, ServantPickerSettings } from "../../types/appUiSettings";
 import { PortraitSelectDialog } from "./PortraitSelectDialog";
 import classAllIcon from "../../../src-tauri/resources/images/class/silver_all.png";
 import classSaberIcon from "../../../src-tauri/resources/images/class/silver_saber.png";
@@ -67,8 +70,15 @@ interface ServantSelectDialogProps {
 
 const RARITY_FILTER_OPTIONS = [null, 1, 2, 3, 4, 5] as const;
 const ROW_HEIGHT = 72;
+const GRID_SIZES = {
+  small: { label: "小", faceSize: 48, nextLabel: "中" },
+  medium: { label: "中", faceSize: 64, nextLabel: "大" },
+  large: { label: "大", faceSize: 80, nextLabel: "小" },
+} as const;
+const GRID_MAX_COLUMNS = 8;
+const GRID_GAP = 8;
 const OVERSCAN = 4;
-const VIEWPORT_H = 420;
+const VIEWPORT_H = 330;
 
 interface ClassFilterOption {
   value: string;
@@ -271,6 +281,10 @@ export function ServantSelectDialog({
   onPortraitSaved,
 }: ServantSelectDialogProps) {
   const [search, setSearch] = useState("");
+  const [pickerSettings, setPickerSettings] = useState<ServantPickerSettings | null>(null);
+  const [savingPickerSettings, setSavingPickerSettings] = useState(false);
+  const [pickerSettingsError, setPickerSettingsError] = useState<string | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(520);
   const [classFilter, setClassFilter] = useState(
     normalizeClassFilter(defaultClassFilter)
   );
@@ -339,13 +353,36 @@ export function ServantSelectDialog({
   const safeActiveIndex =
     filtered.length === 0 ? 0 : Math.min(activeIndex, filtered.length - 1);
 
+  const isGrid = pickerSettings?.layout === "grid";
+  const gridSize = pickerSettings ? GRID_SIZES[pickerSettings.gridSize] : null;
+  const columns = isGrid && gridSize
+    ? Math.max(1, Math.min(
+      GRID_MAX_COLUMNS,
+      Math.floor((viewportWidth + GRID_GAP) / (gridSize.faceSize + 8 + GRID_GAP)),
+    ))
+    : 1;
+  const rowHeight = isGrid && gridSize ? gridSize.faceSize + 8 + GRID_GAP : ROW_HEIGHT;
+  const rowCount = Math.ceil(filtered.length / columns);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!open || !el) return;
+    const updateWidth = () => {
+      if (el.clientWidth > 0) setViewportWidth(el.clientWidth);
+    };
+    updateWidth();
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [open, isGrid]);
+
   const startIndex = Math.max(
     0,
-    Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN
-  );
+    Math.floor(scrollTop / rowHeight) - OVERSCAN
+  ) * columns;
   const endIndex = Math.min(
     filtered.length,
-    Math.ceil((scrollTop + VIEWPORT_H) / ROW_HEIGHT) + OVERSCAN
+    (Math.ceil((scrollTop + VIEWPORT_H) / rowHeight) + OVERSCAN) * columns
   );
   const visible = useMemo(
     () => filtered.slice(startIndex, endIndex),
@@ -408,6 +445,40 @@ export function ServantSelectDialog({
 
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
+    setPickerSettings(null);
+    setPickerSettingsError(null);
+    invoke<ServantPickerSettings>("get_servant_picker_settings")
+      .then((settings) => {
+        if (cancelled) return;
+        setPickerSettings(settings);
+        setActiveIndex(0);
+        resetScroll();
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setPickerSettingsError(`读取显示设置失败：${String(error)}`);
+      });
+    return () => { cancelled = true; };
+  }, [open, resetScroll]);
+
+  const changePickerSettings = async (action: ServantPickerAction) => {
+    if (!pickerSettings || savingPickerSettings) return;
+    setSavingPickerSettings(true);
+    setPickerSettingsError(null);
+    try {
+      const saved = await invoke<ServantPickerSettings>("update_servant_picker_settings", { action });
+      setPickerSettings(saved);
+      setActiveIndex(0);
+      resetScroll();
+    } catch (error) {
+      setPickerSettingsError(`保存显示设置失败：${String(error)}`);
+    } finally {
+      setSavingPickerSettings(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!open) return;
     setClassFilter(normalizeClassFilter(defaultClassFilter));
     setActiveIndex(0);
     resetScroll();
@@ -447,14 +518,14 @@ export function ServantSelectDialog({
   const ensureVisible = useCallback((index: number) => {
     const el = scrollRef.current;
     if (!el) return;
-    const top = index * ROW_HEIGHT;
-    const bottom = top + ROW_HEIGHT;
+    const top = Math.floor(index / columns) * rowHeight;
+    const bottom = top + rowHeight;
     if (top < el.scrollTop) {
       el.scrollTop = top;
     } else if (bottom > el.scrollTop + el.clientHeight) {
       el.scrollTop = bottom - el.clientHeight;
     }
-  }, []);
+  }, [columns, rowHeight]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -463,16 +534,29 @@ export function ServantSelectDialog({
       switch (e.key) {
         case "ArrowDown": {
           e.preventDefault();
-          const next = Math.min(safeActiveIndex + 1, filtered.length - 1);
+          const next = Math.min(safeActiveIndex + columns, filtered.length - 1);
           setActiveIndex(next);
           ensureVisible(next);
           break;
         }
         case "ArrowUp": {
           e.preventDefault();
-          const prev = Math.max(safeActiveIndex - 1, 0);
+          const prev = Math.max(safeActiveIndex - columns, 0);
           setActiveIndex(prev);
           ensureVisible(prev);
+          break;
+        }
+        case "ArrowLeft":
+        case "ArrowRight": {
+          // Keep horizontal arrows available for editing the search text.
+          if (!isGrid || e.currentTarget instanceof HTMLInputElement) return;
+          e.preventDefault();
+          const next = Math.max(0, Math.min(
+            safeActiveIndex + (e.key === "ArrowRight" ? 1 : -1),
+            filtered.length - 1,
+          ));
+          setActiveIndex(next);
+          ensureVisible(next);
           break;
         }
         case "Enter": {
@@ -484,7 +568,7 @@ export function ServantSelectDialog({
         }
       }
     },
-    [filtered, safeActiveIndex, handleSelect, ensureVisible]
+    [filtered, safeActiveIndex, handleSelect, ensureVisible, columns, isGrid]
   );
 
   return (
@@ -492,22 +576,52 @@ export function ServantSelectDialog({
       <Dialog.Content maxWidth="560px" className="servant-dialog">
         <Dialog.Title size="4">选择从者</Dialog.Title>
 
-        <TextField.Root
-          placeholder="搜索从者名称..."
-          size="2"
-          value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setActiveIndex(0);
-            resetScroll();
-          }}
-          onKeyDown={handleKeyDown}
-          className="servant-search"
-        >
-          <TextField.Slot>
-            <MagnifyingGlassIcon />
-          </TextField.Slot>
-        </TextField.Root>
+        <Flex align="center" gap="2" className="servant-search-row">
+          <TextField.Root
+            placeholder="搜索从者名称..."
+            size="2"
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setActiveIndex(0);
+              resetScroll();
+            }}
+            onKeyDown={handleKeyDown}
+            className="servant-search"
+          >
+            <TextField.Slot>
+              <MagnifyingGlassIcon />
+            </TextField.Slot>
+          </TextField.Root>
+          {isGrid && gridSize && (
+            <Tooltip content={`头像大小：${gridSize.label}，点击切换为${gridSize.nextLabel}`}>
+              <IconButton
+                size="2"
+                variant="outline"
+                color="gray"
+                aria-label={`调整头像大小（当前：${gridSize.label}）`}
+                disabled={savingPickerSettings}
+                onClick={() => void changePickerSettings("cycleGridSize")}
+              >
+                <SizeIcon />
+              </IconButton>
+            </Tooltip>
+          )}
+          <Tooltip content={isGrid ? "切换为列表布局" : "切换为网格布局"}>
+            <IconButton
+              size="2"
+              variant="outline"
+              color="gray"
+              aria-label={isGrid ? "切换为列表布局" : "切换为网格布局"}
+              disabled={!pickerSettings || savingPickerSettings}
+              onClick={() => void changePickerSettings("toggleLayout")}
+            >
+              {isGrid ? <RowsIcon /> : <GridIcon />}
+            </IconButton>
+          </Tooltip>
+        </Flex>
+
+        {pickerSettingsError && <Text size="1" color="red" role="alert">{pickerSettingsError}</Text>}
 
         <Flex gap="2" className="servant-filter-row">
           <div
@@ -588,28 +702,31 @@ export function ServantSelectDialog({
           ) : (
             <div
               style={{
-                height: filtered.length * ROW_HEIGHT,
+                height: rowCount * rowHeight,
                 position: "relative",
               }}
+              className={isGrid ? "servant-options-grid" : undefined}
               role="listbox"
               aria-label="从者列表"
             >
               {visible.map((servant, i) => {
                 const index = startIndex + i;
                 const classIcon = getServantClassIcon(servant);
-                return (
+                const option = (
                   <button
                     key={servant.variantKey}
                     role="option"
                     aria-selected={index === safeActiveIndex}
+                    aria-label={isGrid ? displayCnName(servant) : undefined}
                     className={`servant-option ${index === safeActiveIndex ? "focused" : ""}`}
                     style={{
                       position: "absolute",
-                      top: index * ROW_HEIGHT,
-                      left: 0,
-                      right: 0,
-                      height: ROW_HEIGHT,
+                      top: Math.floor(index / columns) * rowHeight,
+                      left: `calc(${index % columns} * (100% + ${GRID_GAP}px) / ${columns})`,
+                      width: `calc((100% - ${(columns - 1) * GRID_GAP}px) / ${columns})`,
+                      height: rowHeight - (isGrid ? GRID_GAP : 0),
                     }}
+                    onKeyDown={handleKeyDown}
                     onClick={() => handleSelect(servant)}
                     onContextMenu={(event) => {
                       event.preventDefault();
@@ -619,11 +736,26 @@ export function ServantSelectDialog({
                     onMouseEnter={() => setActiveIndex(index)}
                   >
                     <div className="servant-option-content">
-                      <div className="servant-face-frame">
+                      <div
+                        className="servant-face-frame"
+                        style={isGrid && gridSize ? {
+                          width: gridSize.faceSize,
+                          height: gridSize.faceSize,
+                          flexBasis: gridSize.faceSize,
+                        } : undefined}
+                      >
                         {faceSrcByKey[servant.variantKey] ? (
-                          <img src={faceSrcByKey[servant.variantKey] ?? ""} alt="" />
+                          <img className="servant-face-image" src={faceSrcByKey[servant.variantKey] ?? ""} alt="" />
                         ) : (
                           <span>{servant.class.slice(0, 2)}</span>
+                        )}
+                        {isGrid && (
+                          <img
+                            className="servant-face-class-icon"
+                            src={classIcon.icon}
+                            alt={classIcon.label}
+                            title={classIcon.label}
+                          />
                         )}
                         <Text
                           className="servant-rarity"
@@ -632,25 +764,43 @@ export function ServantSelectDialog({
                           {"★".repeat(servant.rarity)}
                         </Text>
                       </div>
-                      <Flex direction="column" align="start" gap="1" className="servant-option-text">
-                        <Flex align="center" gap="2" wrap="wrap" className="servant-option-name-row">
-                          <img
-                            src={classIcon.icon}
-                            alt={classIcon.label}
-                            title={classIcon.label}
-                            className="servant-option-class-icon"
-                          />
-                          <Text size="2" weight="medium">
-                            {displayCnName(servant)}
+                      {!isGrid && (
+                        <Flex direction="column" align="start" gap="1" className="servant-option-text">
+                          <Flex align="center" gap="2" wrap="wrap" className="servant-option-name-row">
+                            <img
+                              src={classIcon.icon}
+                              alt={classIcon.label}
+                              title={classIcon.label}
+                              className="servant-option-class-icon"
+                            />
+                            <Text size="2" weight="medium" className="servant-option-name" title={displayCnName(servant)}>
+                              {displayCnName(servant)}
+                            </Text>
+                          </Flex>
+                          <Text size="1" className="servant-np-name" title={servant.noblePhantasmName ?? "宝具未记录"}>
+                            {servant.noblePhantasmName ?? "宝具未记录"}
                           </Text>
                         </Flex>
-                        <Text size="1" className="servant-np-name">
-                          {servant.noblePhantasmName ?? "宝具未记录"}
-                        </Text>
-                      </Flex>
+                      )}
                     </div>
                   </button>
                 );
+                return isGrid ? (
+                  <Tooltip
+                    key={servant.variantKey}
+                    delayDuration={1000}
+                    disableHoverableContent
+                    content={
+                      <>
+                        <Text weight="medium">{displayCnName(servant)}</Text>
+                        <br />
+                        宝具：{servant.noblePhantasmName ?? "宝具未记录"}
+                      </>
+                    }
+                  >
+                    {option}
+                  </Tooltip>
+                ) : option;
               })}
             </div>
           )}
